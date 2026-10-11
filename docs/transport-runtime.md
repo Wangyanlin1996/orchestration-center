@@ -8,6 +8,7 @@ HTTP、HTTPS、是否验证客户端证书、业务认证与 AgentCard 签名是
 - 外部机器 API：默认 auto；验证客户端证书的 HTTPS 使用 mTLS，否则使用 ORCH_API_TOKEN（至少 32 字节）的 Authorization: Bearer。用户 Cookie 不作为机器认证；旧的匿名机器客户端需要升级。
 - 自定义认证：external.auth.mode=custom，通过 HandlerRegistry.register(InterfaceType.AUTHENTICATE_EXTERNAL, ...) 注册 BaseHandler 扩展，async handle(Request) 返回 MachineIdentity；异常/空结果失败关闭。插件必须在 startup preflight 前显式加载。
 - ORCH_ENABLE_HTTPS 与 ORCH_VERIFY_CLIENT 分开设置；ORCH_CLIENT_VERIFY_SERVER 控制访问 RC 的服务端校验。RC 主端口 Token 模式需要 REGISTRY_ACCESS_TOKEN，私有 CA/mTLS 使用 REGISTRY_CA_FILE、REGISTRY_CLIENT_CERT、REGISTRY_CLIENT_KEY，加密客户端 key 的口令通过 REGISTRY_CLIENT_KEY_PASSWORD 注入。
+- ORCH_CLIENT_VERIFY_SERVER=false 只关闭远端服务证书/主机名校验，不丢弃 REGISTRY_CLIENT_CERT/KEY；mTLS 身份仍加载和校验。此模式不配置 REGISTRY_CA_FILE（也不接受 CRL），缺一侧身份文件、不可读密钥或错误口令仍失败关闭。注册中心适配器保持此合同，即使当前安装的 SDK 发布版本在关闭校验时直接返回 verify=False；本地 editable SDK 的行为不作为发布镜像能力证明。
 - ORCH_PUBLIC_SCHEME 指公共浏览器入口（http/https），与后端协议不一定一致。可信代理地址使用 ORCH_FORWARDED_ALLOW_IPS，不应默认 *；不会直接读取未受信的 X-Forwarded-Proto。
 - Compose 默认浏览器入口为 HTTP，因此公共协议默认 http，即使后端使用 HTTPS。外部 HTTPS 网关或直接使用后端 HTTPS 登录时，显式设置 ORCH_PUBLIC_SCHEME=https；这控制 Cookie Secure，不改变后端监听协议。
 - Compose 前端根据 ORCH_ENABLE_HTTPS 推导 upstream 协议；默认验证 HTTPS，需要 BACKEND_CA_FILE，mTLS 还需 BACKEND_CLIENT_CERT/KEY。BACKEND_VERIFY_SERVER=false 是显式跳过服务端校验，不会取消客户端证书要求。

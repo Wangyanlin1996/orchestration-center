@@ -14,6 +14,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import ssl
 from typing import Union, Dict, Any, Optional, List
 
 import httpx
@@ -40,13 +41,33 @@ class AgentRegistryClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            ssl_context = (create_client_ssl_context(verify_server=self.ssl_verify, **self.tls_options)
+            ssl_context = (self._create_tls_context()
                            if self.base_url.lower().startswith('https://') else True)
             self._client = httpx.AsyncClient(
                 timeout=self.timeout, verify=ssl_context, headers=self.headers,
                 follow_redirects=False,
             )
         return self._client
+
+    def _create_tls_context(self):
+        """Keep client identity independent of server-certificate verification.
+
+        Supported released SDK versions return False immediately for disabled
+        verification, losing mTLS material. Load/validate identity through the
+        SDK's verified builder first, then change only peer verification. This
+        also works with newer SDKs without duplicating key-loading behavior.
+        """
+        if not self.ssl_verify and (self.tls_options.get("ca_certs_path") or self.tls_options.get("crl_path")):
+            raise ValueError("CA/CRL configuration requires server verification")
+        identity = bool(self.tls_options.get("cert_path") or self.tls_options.get("key_path"))
+        context = create_client_ssl_context(verify_server=self.ssl_verify or identity, **self.tls_options)
+        if not self.ssl_verify and identity:
+            if not isinstance(context, ssl.SSLContext):
+                raise ValueError("TLS client identity could not be loaded")
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            logger.warning("Registry TLS server verification disabled; client identity retained")
+        return context
 
     async def close(self):
         if self._client is not None:
