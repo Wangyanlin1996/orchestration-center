@@ -169,10 +169,8 @@ source .venv/bin/activate      # Linux
 # .venv\Scripts\activate       # Windows
 pip install -r requirements.txt
 
-# The backend refuses to start without a credential unless it is explicitly
-# told this is a local demo -- see "Fail-closed startup" below.
+# Configure the login account before startup, including local demos.
 python generate_access_password.py      # writes access_password into etc/conf/server.conf
-# (alternative, no login at all, loopback only: security.dev_insecure_mode=true)
 
 # Start backend (port 5001)
 python -m orchestrate.start
@@ -400,38 +398,22 @@ The internal API (`/rest/v1/orchestrate/*`) is protected by token-based authenti
 
 ### Fail-closed startup
 
-The external API (`/api/v1/*`) has no application-layer guard -- the auth middleware
-covers `/rest/v1/orchestrate` and the `/psops` alias only -- so with `enable_https=false`
-those routes have neither mTLS nor a token check. A startup check
-(`orchestrate/server/security_preflight.py`) therefore evaluates the deployment before
-the server binds:
+Internal and public APIs share account authentication by default, independently
+of TLS. Startup preflight checks that an account credential is configured before binding:
 
-| `enable_https` | Credential configured | Bind address | Outcome |
-|---|---|---|---|
-| `true` | any | any | start |
-| `false` | yes | any | start, with a warning that the transport is plaintext |
-| `false` | no | loopback | start **only** with `security.dev_insecure_mode=true` |
-| `false` | no | non-loopback | **refused**, with the two ways to fix it |
+In file mode, set the login password hash with `python generate_access_password.py`
+or `ORCH_ACCESS_PASSWORD`. In database mode, existing users are sufficient; for
+an empty database only, provide `OC_ADMIN_INITIAL_PASSWORD` or
+`admin_initial_password_file`. The initial password must meet login complexity
+requirements and be changed after first login; it does not reset existing users.
 
-The shipped `etc/conf/server.conf` has `enable_https=false` and an empty
-`access_password`, and the image defaults (`Dockerfile`,
-`docker-compose.yml`) bind `0.0.0.0` -- so a container that is not given a
-credential is refused at startup rather than starting open. To run the backend,
-pick one of the two ways:
-
-1. **Configure a credential** (required for anything reachable from off-host):
-   set `access_password` with `python generate_access_password.py`, or point
-   `admin_initial_password_file` at an existing file, or export
-   `OC_ADMIN_INITIAL_PASSWORD`. With `enable_https=false` the password and session
-   token travel in cleartext, so enable HTTPS for anything but a local run.
-2. **Bind a loopback address** (`ip=127.0.0.1`) if the instance is only reachable
-   locally. A credential-less loopback bind still needs
-   `security.dev_insecure_mode=true`; it disables authentication for every route and
-   is meant for local demos. The flag is echoed by `GET /health` so an instance
-   started this way is visible from outside, and an audit entry is written at startup.
-
-`security.dev_insecure_mode=true` does **not** lift the refusal for a non-loopback
-bind -- there the exposure is real regardless of who set the flag.
+Both HTTP and HTTPS require account login, including loopback deployments. No
+development switch disables authentication, and `TESTING` cannot change runtime
+authentication. The public template intentionally has no password; configure one
+before starting. HTTP logs a plaintext-transport warning. `GET /health` remains a
+public minimal liveness probe, not a readiness or business-authentication check.
+Explicit legacy mTLS can serve direct integrations without an account, but does
+not authorize the frontend/internal account APIs.
 
 ### Sample Agent Credentials
 
@@ -443,12 +425,11 @@ For anything beyond the local demo, do not reuse these defaults:
 
 | Config Key | Description | Default |
 |------------|-------------|---------|
-| `access_password` | SHA-256 hash of the login password (file mode only). **Empty means authentication is unconfigured, not disabled**: a startup check refuses to bind a non-loopback address with no credential while `enable_https=false` — see [Fail-closed startup](#fail-closed-startup). | empty (unconfigured) |
-| `security.dev_insecure_mode` | Local-demo exception to that check: permits a credential-less bind **only** on a loopback address. Authentication is genuinely off while it is set, so an audit entry is written at startup and `GET /health` echoes the flag. | `false` |
+| `access_password` | Versioned password hash (legacy SHA-256 supported) for file mode. Empty means account authentication is unconfigured, not disabled; default startup refuses it on HTTP and HTTPS — see [Fail-closed startup](#fail-closed-startup). | empty (unconfigured) |
 | `access_token_ttl` | Session token lifetime in seconds. | `43200` (12h) |
 | `persistence_mode` | `postgresql` or `mysql` enables database-backed user management; `file` uses config-based auth. | `file` |
 
-The frontend sends the password as-is; the backend is what hashes it (server-side, salted, for DB-mode accounts; against the configured SHA-256 in file mode). **This relies on `enable_https=true` for confidentiality in transit** -- see the TLS/HTTPS section below; don't run with the shipped `enable_https=false` default outside local development. The session token is a `Secure` (when `enable_https=true`), `HttpOnly`, `SameSite=Lax` cookie set on login -- it's not readable from JavaScript (mitigates XSS token theft) and the browser attaches it automatically, including on `EventSource`/SSE connections, so it's never carried in a URL or logged as a query param. `Authorization: Bearer <token>` is also accepted as a fallback for non-browser clients (curl, scripts).
+The frontend sends the password as-is; the backend verifies its stored hash. Use a public HTTPS endpoint for confidentiality in transit. Login sets an `HttpOnly`, `SameSite=Lax` cookie; `Secure` follows `public_scheme` or the trusted request scheme, not backend TLS alone. Browser JavaScript cannot read it, and EventSource/SSE uses it without putting credentials in URLs. Explicit Bearer headers are also accepted by the internal API and take precedence over cookies.
 
 A cookie only attaches to a **same-origin** request. Both shipped serving paths -- nginx in front of both in docker-compose, and the Vite dev server's own `/api/orchestrate` proxy for `npm run dev` -- put the frontend and this API on the same origin, so this is transparent. A manually-configured direct-IP deployment (frontend and backend on genuinely different origins) needs `CORS_ORIGINS` set to the frontend's exact origin (not the default `*`, which can't be combined with credentialed requests) for the cookie to work cross-origin at all.
 
@@ -500,9 +481,8 @@ Update client trust material where required; do not overwrite the CA store used 
 2. Update `etc/conf/server.conf`:
    ```ini
    enable_https=true
-   verify_client=true           # mTLS -- clients must present a certificate. Set to
-                                 # false only if you understand this leaves the
-                                 # external API (see below) with no authentication.
+   verify_client=true           # TLS client certificates required; false disables
+                                 # this TLS check, not account authentication.
    agent_registry_url=https://127.0.0.1:5000   # if registry center also uses HTTPS
    ```
 
@@ -518,14 +498,16 @@ Update client trust material where required; do not overwrite the CA store used 
 
 ### External API Protection
 
-The external API (`/api/v1/*`) is protected by mTLS at the TLS layer when `enable_https=true` and `verify_client=true`. Clients must present a valid certificate during the TLS handshake -- no application-layer check needed.
+Default account authentication (no mode setting required; `auto` remains an alias) uses the same accounts as frontend login. `POST /api/v1/auth/token` accepts JSON `{"username":"admin","password":"<your-password>"}` and returns `access_token`, `token_type: "Bearer"`, and `expires_in`. Use `Authorization: Bearer <access_token>` on `/api/v1/*`; cookies alone and URL tokens are rejected. `POST /api/v1/auth/logout` revokes that Bearer. Tokens share the session TTL/store; password changes and account deletion revoke all of the account's sessions. Accounts requiring an initial password change must complete it in the web UI first. Both login endpoints share per-IP brute-force limits. This is first-party login, not an OAuth2 authorization server.
 
-**With the shipped `enable_https=false` default, the external API has no protection at all** -- no mTLS (there's no TLS layer to begin with) and no application-layer check (`auth_middleware` only guards the internal API, `/rest/v1/orchestrate/*`, by design). Anything reachable on the network can call it. Don't expose a default (HTTP) deployment beyond local development without a reverse proxy, firewall, or network policy in front of it -- and once you do enable HTTPS, leave `verify_client` at its secure default (`true`) unless you have another authentication layer in place.
+HTTP and HTTPS enforce the same account authentication. `verify_client=false` or client-side `verify=False` does not bypass it. With `verify_client=true`, a TLS client certificate is additionally required. Direct legacy integrations may explicitly select `bearer` (fixed `ORCH_API_TOKEN`, at least 32 bytes), `mtls` (verified HTTPS client certificate), or `custom`; these are not automatic fallbacks. Nginx/Vite gateway requests always require the original user's Bearer for public APIs, even when the proxy itself presents a certificate. See [transport configuration](docs/transport-runtime.md).
 
 ### Auth Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `POST` | `/api/v1/auth/token` | Same login account, returns Bearer token without setting a cookie |
+| `POST` | `/api/v1/auth/logout` | Revoke the explicit account Bearer token |
 | `POST` | `/rest/v1/orchestrate/auth/login` | Login with username + password, sets the session cookie |
 | `POST` | `/rest/v1/orchestrate/auth/register` | Register a new user (PostgreSQL/MySQL mode only) |
 | `POST` | `/rest/v1/orchestrate/auth/logout` | Revoke the session token and clear its cookie |

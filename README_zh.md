@@ -281,7 +281,7 @@ flowchart TB
 **数据库模式（`persistence_mode=postgresql` 或 `mysql`）**：
 
 - 明文密码通过 TLS 发送到后端，使用版本化 bcrypt 哈希保存；旧哈希在成功登录后升级。
-- 首次启动自动创建默认 `admin` 用户（密码：`OpenAN@2026`）。
+- SQL 空用户库首次启动需注入 `OC_ADMIN_INITIAL_PASSWORD` 或配置 `admin_initial_password_file` 来创建 admin；无硬编码默认密码，已有账号不会重置。
 - 自助注册默认关闭；显式设置 `auth.register.enabled=true` 后才可注册。
 - 密码要求至少 8 位，且至少包含以下两类字符：数字、大写字母、小写字母、特殊字符。该策略在服务端强制校验（`common/util/password_util.validate_password_complexity`），而不仅仅是前端界面提示。
 
@@ -292,11 +292,11 @@ flowchart TB
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `access_password` | 登录密码的 SHA-256 哈希值（仅 file 模式）。留空则禁用认证。 | 空（禁用） |
+| `access_password` | 文件模式登录密码的版本化哈希，兼容旧 SHA-256。留空是未配置账号认证，不是关闭认证；默认 HTTP/HTTPS 均拒绝以此配置启动。 | 空（未配置） |
 | `access_token_ttl` | 会话令牌有效期（秒）。 | `43200`（12小时） |
 | `persistence_mode` | `postgresql` 或 `mysql` 启用数据库用户管理；`file` 使用配置密码认证。 | `file` |
 
-前端按原样发送密码；由后端负责哈希（数据库模式下按用户加盐哈希；文件模式下与配置的 SHA-256 值比对）。**这依赖 `enable_https=true` 来保证传输过程的机密性**——见下方 TLS/HTTPS 一节；除本地开发外，不要使用默认的 `enable_https=false`。会话令牌以 `Secure`（当 `enable_https=true` 时）、`HttpOnly`、`SameSite=Lax` 的 Cookie 形式在登录时下发——JavaScript 无法读取它（缓解 XSS 窃取令牌的风险），浏览器会自动携带它，包括在 `EventSource`/SSE 连接上，因此它不会出现在 URL 或作为查询参数被记录到日志中。为非浏览器客户端（curl、脚本）保留了 `Authorization: Bearer <token>` 作为后备方式。
+前端提交原始密码，由后端验证已存哈希；生产公共入口应使用 HTTPS 保证传输机密性。登录下发 HttpOnly、SameSite=Lax Cookie，Secure 取决于 `public_scheme` 或可信请求协议，而非仅后端 TLS。浏览器 JavaScript 不读取 Token，EventSource/SSE 通过 Cookie 认证，不将 Token 放入 URL。内部 API 也接受显式 Bearer，Authorization 优先于 Cookie。
 
 Cookie 只会在**同源**请求中被携带。当前提供的两种部署方式——docker-compose 中前后端都在 nginx 之后，以及 `npm run dev` 时 Vite 开发服务器自带的 `/api/orchestrate` 代理——都让前端与本 API 处于同一来源，因此这一点是透明的。若手动配置为直连 IP 部署（前后端确实处于不同源），则需要将 `CORS_ORIGINS` 设置为前端的确切来源（而非默认的 `*`，因为它无法与带凭证的请求组合使用），Cookie 才能跨源生效。
 
@@ -346,8 +346,8 @@ SAN 必须与客户端 URL 的主机匹配，IP 必须使用 `--ip`，仅设置 
 2. 修改 `etc/conf/server.conf`：
    ```ini
    enable_https=true
-   verify_client=true           # mTLS：要求客户端出示证书。仅在你清楚这会让
-                                 # 外部 API（见下文）完全没有认证保护时才设为 false
+   verify_client=true           # TLS 要求客户端证书；false 只关闭此项校验，
+                                 # 不会关闭账号认证。
    agent_registry_url=https://127.0.0.1:5000   # 如果注册中心也用了 HTTPS
    ```
 
@@ -363,14 +363,16 @@ SAN 必须与客户端 URL 的主机匹配，IP 必须使用 `--ip`，仅设置 
 
 ### 外部 API 保护
 
-外部 API（`/api/v1/*`）在 `enable_https=true` 且 `verify_client=true` 时受 mTLS 保护。客户端必须在 TLS 握手阶段出示有效证书，无需应用层额外检查。
+默认账号认证（无需配置 mode；`auto` 保留为兼容别名）使用与网页登录相同的账号。调用 `POST /api/v1/auth/token`，JSON 提交 `{"username":"admin","password":"<你的密码>"}`，返回 `access_token`、`token_type: "Bearer"`、`expires_in`；随后通过 `Authorization: Bearer <access_token>` 访问 `/api/v1/*`。Cookie 单独携带及 URL Token 均不授权公开 API。`POST /api/v1/auth/logout` 撤销该 Bearer。网页/API 共用会话有效期和存储，改密、删除账号撤销该账号全部会话；强制初次改密需先通过网页完成。两种登录共用每 IP 限流。这是自有账号登录接口，不是 OAuth2 授权服务器。
 
-**使用默认的 `enable_https=false` 时，外部 API 完全没有保护**——既没有 mTLS（根本不存在 TLS 层），也没有应用层检查（`auth_middleware` 按设计只保护内部 API `/rest/v1/orchestrate/*`）。网络可达的任何请求方都能调用它。除本地开发外，不要在没有反向代理、防火墙或网络策略保护的情况下暴露默认（HTTP）部署；一旦启用 HTTPS，除非你另有应用层认证机制，否则应保持 `verify_client` 处于安全默认值（`true`）。
+HTTP 与 HTTPS 默认采用同样的账号认证。服务端 `verify_client=false` 或调用方 `verify=False` 不会关闭它；`verify_client=true` 还额外要求 TLS 客户端证书。旧直连接入可显式选 `bearer`（至少 32 字节的固定 `ORCH_API_TOKEN`）、`mtls`（HTTPS 验证客户端证书）或 `custom`，不自动回退。Nginx/Vite 代理的公开 API 始终验证原用户 Bearer，不能借代理证书放行匿名访问。详见[传输配置](docs/transport-runtime.md)。
 
 ### 认证接口
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
+| `POST` | `/api/v1/auth/token` | 与网页登录相同账号，返回 Bearer，不设置 Cookie |
+| `POST` | `/api/v1/auth/logout` | 撤销显式传入的账号 Bearer |
 | `POST` | `/rest/v1/orchestrate/auth/login` | 使用用户名 + 密码登录，设置会话 Cookie |
 | `POST` | `/rest/v1/orchestrate/auth/register` | 注册新用户（仅 PostgreSQL/MySQL 模式） |
 | `POST` | `/rest/v1/orchestrate/auth/logout` | 撤销会话令牌并清除其 Cookie |

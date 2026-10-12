@@ -61,7 +61,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ### Authentication
 
-The internal API (`/rest/v1/orchestrate/*`) supports optional token authentication with two modes:
+Internal and public APIs share account authentication by default, with two account sources:
 
 - **Database mode (PostgreSQL/MySQL)**: Users are stored in the database with versioned password hashes. User management is available; self-registration is disabled by default and requires `auth.register.enabled=true`.
 - **File mode**: A single password is configured via `access_password` in `server.conf`. Username is `admin` only.
@@ -96,7 +96,33 @@ curl -X POST https://127.0.0.1:5001/rest/v1/orchestrate/auth/register \
   -d '{"username":"newuser","password":"<plaintext_password>"}'
 ```
 
-The external API (`/api/v1/*`) is protected by mTLS at the TLS layer when `enable_https=true` and `verify_client=true`.
+**Programmatic login (same account, default `external.auth.mode=auto/user`):**
+
+```bash
+curl -X POST https://127.0.0.1:5001/api/v1/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"<plaintext_password>"}'
+```
+
+Successful response (no session cookie; `Cache-Control: no-store`):
+
+```json
+{"access_token":"<token>","token_type":"Bearer","expires_in":43200}
+```
+
+Pass `Authorization: Bearer <token>` to public `/api/v1/*` requests. Cookie-only
+and query-token requests are rejected. POST `/api/v1/auth/logout` with that header
+revokes only that token. Password changes/account deletion revoke all sessions;
+tokens also expire by TTL and are lost on process restart. Initial forced password
+changes must be completed via web login before API token issuance. Both login
+channels share per-IP rate limits. This is not an OAuth2 authorization server.
+Gateway URLs add `/api/orchestrate` before these paths and preserve the caller's
+Bearer; a proxy certificate is not the caller's identity.
+
+Account authentication is identical on HTTP and HTTPS. `verify_client=true`
+additionally requires a TLS client certificate; `verify=False` at the caller does
+not bypass authentication. Explicit legacy `bearer`/`mtls`/`custom` modes for direct
+integrations are described in [transport configuration](../transport-runtime.md).
 
 ---
 
