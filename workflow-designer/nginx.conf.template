@@ -33,6 +33,10 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    # A browser gateway is not a machine API gateway. Its upstream client
+    # certificate authenticates nginx, never an anonymous browser caller.
+    location ^~ /api/orchestrate/api/ { return 404; }
+
     # Gateway prefix consumed by workflow-designer/src/service/api.js's
     # defaultGateway ('/api/orchestrate'). Strip the prefix and forward to
     # the backend's root, where the internal API is mounted at
@@ -44,6 +48,7 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-OpenAN-Browser-Gateway "1";
 
         # Rendered by 15-openan-backend.envsh; independent trust and mTLS options.
         ${BACKEND_TLS_OPTIONS}

@@ -13,9 +13,8 @@ htmlcov/
 openspec/
 workflow-designer/dist/
 workflow-designer/stats.html
-# Runtime data is never committed; the three demo seed locations below are
-# deliberately tracked (workflow templates served by the /templates endpoints,
-# the pre-seeded SPN demo workflow so fresh clones can run the demo, and the
+# Runtime data is never committed; the two legacy demo seed locations below are
+# deliberately tracked (the pre-seeded SPN demo workflow and the
 # TM Forum IG1526A demo solution package, redistributed verbatim per the
 # redistribution terms in the document's Notice).
 data/*
@@ -23,7 +22,6 @@ data/*
 data/solution_packages/*
 !data/solution_packages/IG1526A_AN_L4_Wireless_Energy_Efficiency_Optimization_Solution_Package_v1.0.0.pdf
 !data/solution_packages/IG1526A_AN_L4_Wireless_Energy_Efficiency_Optimization_Solution_Package_v1.0.0.json
-!data/workflow_templates/
 !data/workflow_storage/
 data/workflow_storage/*
 !data/workflow_storage/psop/

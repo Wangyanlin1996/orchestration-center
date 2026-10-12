@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("path,ignored", [
-    ("data/workflow_templates/example.json", False),
+    ("data/workflow_templates/example.json", True),
+    ("samples/workflow_templates/example.json", False),
     ("data/workflow_storage/psop/psop_spn_cross_city_diagnosis.json", False),
     ("data/workflow_storage/psop/customer.json", True),
     ("data/workflow_storage/psop/nested/customer.json", True),

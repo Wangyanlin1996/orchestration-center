@@ -19,6 +19,14 @@ def test_frontend_hook_is_executable_in_image():
     assert re.search(r"chmod 0?755 /docker-entrypoint.d/15-openan-backend.envsh", dockerfile)
 
 
+def test_browser_proxies_narrow_access_and_overwrite_gateway_marker():
+    nginx = (ROOT / "workflow-designer/nginx.conf.template").read_text(encoding="utf-8")
+    vite = (ROOT / "workflow-designer/vite.config.js").read_text(encoding="utf-8")
+    assert "location ^~ /api/orchestrate/api/ { return 404; }" in nginx
+    assert 'proxy_set_header X-OpenAN-Browser-Gateway "1";' in nginx
+    assert "'X-OpenAN-Browser-Gateway': '1'" in vite
+
+
 def test_compose_cookie_scheme_matches_http_frontend_by_default():
     import yaml
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))

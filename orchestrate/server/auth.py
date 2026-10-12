@@ -326,12 +326,16 @@ async def auth_middleware(request: Request, call_next):
         or the configured custom authentication provider.
     """
     path = request.url.path
+    from orchestrate.server.gateway_policy import is_browser_gateway_request
+    browser_gateway = is_browser_gateway_request(request)
 
     # CORS preflight always allowed.
     if request.method == "OPTIONS":
         return await call_next(request)
 
     if path == "/api/v1" or path.startswith("/api/v1/"):
+        if browser_gateway:
+            return JSONResponse(status_code=403, content=error(403, "Machine APIs are not exposed by the browser gateway"))
         from orchestrate.server.external_auth import authenticate_external
         from orchestrate.server.security_preflight import dev_insecure_mode_enabled, is_loopback_bind
         conf = get_conf()
@@ -363,6 +367,11 @@ async def auth_middleware(request: Request, call_next):
         return JSONResponse(status_code=mapped.status_code, content=error(mapped.status_code, mapped.detail))
 
     if not auth_enabled:
+        if browser_gateway:
+            from orchestrate.server.security_preflight import dev_insecure_mode_enabled, is_loopback_bind
+            conf = get_conf()
+            if not (dev_insecure_mode_enabled(conf) and is_loopback_bind(str(conf.get("ip", "127.0.0.1")))):
+                return JSONResponse(status_code=503, content=error(503, "Browser gateway requires user authentication"))
         return await call_next(request)
 
     if path in _PUBLIC_AUTH_PATHS:

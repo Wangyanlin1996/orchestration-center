@@ -1098,7 +1098,8 @@ async def delete_agent_card(
 # Workflow templates
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_templates_dir = pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "workflow_templates"
+# Bundled, read-only resources must not be hidden by the runtime data volume.
+_templates_dir = pathlib.Path(__file__).resolve().parent.parent.parent / "samples" / "workflow_templates"
 
 @router.get("/templates")
 async def list_templates(
