@@ -34,7 +34,7 @@ from common.util.config_util import get_conf
 from common.util.persistence_mode import validate_storage_mode
 from orchestrate.persistence import build_context, configure_context, current_context
 from orchestrate.server.frontend_support_server import app
-from orchestrate.server.security_preflight import SecurityPreflightError, security_preflight
+from orchestrate.server.security_preflight import SecurityPreflightError, security_preflight, initial_admin_password
 
 def seed_admin_if_empty(default_password):
     """Bootstrap through the bound user port, not the process-global SQL helper."""
@@ -148,10 +148,10 @@ class CustomUvicornServer:
             ssl_certfile=self.conf_obj.ssl_certfile,
             ssl_keyfile=self.conf_obj.ssl_keyfile,
             ssl_keyfile_password=load_cert_password(self.conf_obj.ssl_keyfile_password).decode(DEFAULT_ENCODING),
-            ssl_ca_certs=self.conf_obj.ssl_ca_certs,
+            ssl_ca_certs=self.conf_obj.ssl_ca_certs if self.conf_obj.verify_client != ssl.CERT_NONE else None,
             ssl_cert_reqs=self.conf_obj.verify_client,
             ssl_ciphers=CipherConverter.convert(self.server_config.get(TLS_CIPHER)),
-            timeout_keep_alive=0,
+            timeout_keep_alive=5,
             timeout_graceful_shutdown=2,
             log_level="info",
             proxy_headers=True
@@ -180,7 +180,9 @@ def initialize_storage(server_config):
         # Seed the default admin user if the users table is empty. user_store
         # hashes the real plaintext password server-side (see #9), so this is
         # passed as-is rather than pre-hashed.
-        if seed_admin_if_empty("OpenAN@2026"):
+        if storage.users.has_any():
+            logger.info("Users already exist, skipping admin seed")
+        elif seed_admin_if_empty(initial_admin_password(server_config)):
             logger.info("Default admin user 'admin' created; a password change is required on first login")
         else:
             logger.info("Users already exist, skipping admin seed")
@@ -220,7 +222,9 @@ def main():
     storage = initialize_storage(server_config)
     atexit.register(storage.close)
     if not is_enable_https:
-        uvicorn.run(app, host=server_config.get('ip', "127.0.0.1"), port=int(server_config.get('port', 5001)), timeout_graceful_shutdown=2)
+        uvicorn.run(app, host=server_config.get('ip', "127.0.0.1"), port=int(server_config.get('port', 5001)),
+                    forwarded_allow_ips=server_config.get(FORWARDED_ALLOW_IPS, "127.0.0.1"),
+                    timeout_graceful_shutdown=2)
     else:
         try:
             conf_obj = get_conf_singleton()

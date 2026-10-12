@@ -11,6 +11,7 @@ asserted directly instead of inferred from log lines.
 """
 
 import pytest
+from types import SimpleNamespace
 
 from orchestrate import start
 from orchestrate.core.persistence import WorkflowStorage
@@ -42,6 +43,9 @@ class _FakeStorage:
 def _install(monkeypatch, events, **kwargs):
     seed_result = kwargs.pop("seed_result", True)
     storage = _FakeStorage(events, **kwargs)
+    storage.users = SimpleNamespace(has_any=lambda: not seed_result)
+    # A fake composition root must not replace other API tests' real context.
+    monkeypatch.setattr(start, "configure_context", lambda context: context)
     monkeypatch.setattr(start, "build_context", lambda conf=None: (events.append("build"), storage)[1])
     monkeypatch.setattr(
         start, "seed_admin_if_empty",
@@ -53,11 +57,12 @@ def _install(monkeypatch, events, **kwargs):
 def test_startup_order_is_reachability_then_schema_then_seed(monkeypatch):
     events = []
     storage = _install(monkeypatch, events)
+    monkeypatch.setenv("OC_ADMIN_INITIAL_PASSWORD", "ConfiguredAdmin9!")
 
     result = start.initialize_storage({"persistence_mode": "postgresql"})
 
     assert result is storage
-    assert events == ["build", "check_ready", "initialize", ("seed", "OpenAN@2026", True)]
+    assert events == ["build", "check_ready", "initialize", ("seed", "ConfiguredAdmin9!", True)]
 
 
 def test_existing_users_skip_the_seed(monkeypatch):
@@ -67,7 +72,7 @@ def test_existing_users_skip_the_seed(monkeypatch):
     # Users already exist: the seed reports that and startup continues.
     start.initialize_storage({})
 
-    assert events == ["build", "check_ready", "initialize", ("seed", "OpenAN@2026", False)]
+    assert events == ["build", "check_ready", "initialize"]
 
 
 def test_unreachable_storage_aborts_before_the_schema_is_touched(monkeypatch):

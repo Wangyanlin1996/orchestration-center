@@ -389,7 +389,7 @@ The internal API (`/rest/v1/orchestrate/*`) is protected by token-based authenti
 **Database mode (`persistence_mode=postgresql` or `mysql`)**:
 
 - The plaintext password is sent to the backend over TLS and stored using versioned bcrypt hashes; legacy hashes are upgraded on successful login.
-- A default `admin` user (password: `OpenAN@2026`) is auto-created on first startup.
+- On an empty SQL user store, set `OC_ADMIN_INITIAL_PASSWORD` or `admin_initial_password_file` to create the first `admin`. No compiled-in password is used; existing users are never reset on restart.
 - Self-registration is disabled by default; explicitly set `auth.register.enabled=true` to enable it.
 - Passwords must be at least 8 characters and include at least two of: a digit, an uppercase letter, a lowercase letter, a special character. Enforced server-side (`common/util/password_util.validate_password_complexity`), not just in the UI.
 

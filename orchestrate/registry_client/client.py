@@ -14,6 +14,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import ssl
 from typing import Union, Dict, Any, Optional, List
 
 import httpx
@@ -29,26 +30,44 @@ class AgentRegistryClient:
     Async client SDK for interacting with Agent Registry REST API.
     """
 
-    def __init__(self, base_url: str, timeout: int = 30, ssl_verify: bool = True):
+    def __init__(self, base_url: str, timeout: int = 30, ssl_verify: bool = True,
+                 *, headers: Optional[dict] = None, tls_options: Optional[dict] = None):
         self.base_url = base_url
         self.timeout = timeout
         self.ssl_verify = ssl_verify
+        self.headers = headers or {}
+        self.tls_options = tls_options or {}
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            ssl_context = create_client_ssl_context(verify_server=self.ssl_verify)
+            ssl_context = (self._create_tls_context()
+                           if self.base_url.lower().startswith('https://') else True)
             self._client = httpx.AsyncClient(
-                timeout=self.timeout, verify=ssl_context, follow_redirects=True,
-                # The registry center sets timeout_keep_alive=0 (Connection:
-                # close after each response).  Disabling keepalive entirely
-                # avoids "Server disconnected" errors from stale pooled
-                # connections.
-                limits=httpx.Limits(
-                    max_keepalive_connections=0, keepalive_expiry=0.0
-                ),
+                timeout=self.timeout, verify=ssl_context, headers=self.headers,
+                follow_redirects=False,
             )
         return self._client
+
+    def _create_tls_context(self):
+        """Keep client identity independent of server-certificate verification.
+
+        Supported released SDK versions return False immediately for disabled
+        verification, losing mTLS material. Load/validate identity through the
+        SDK's verified builder first, then change only peer verification. This
+        also works with newer SDKs without duplicating key-loading behavior.
+        """
+        if not self.ssl_verify and (self.tls_options.get("ca_certs_path") or self.tls_options.get("crl_path")):
+            raise ValueError("CA/CRL configuration requires server verification")
+        identity = bool(self.tls_options.get("cert_path") or self.tls_options.get("key_path"))
+        context = create_client_ssl_context(verify_server=self.ssl_verify or identity, **self.tls_options)
+        if not self.ssl_verify and identity:
+            if not isinstance(context, ssl.SSLContext):
+                raise ValueError("TLS client identity could not be loaded")
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            logger.warning("Registry TLS server verification disabled; client identity retained")
+        return context
 
     async def close(self):
         if self._client is not None:
