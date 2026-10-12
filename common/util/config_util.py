@@ -47,10 +47,14 @@ def apply_env_overrides(config: dict) -> None:
         "ORCH_VERIFY_CLIENT": "verify_client", "ORCH_CLIENT_VERIFY_SERVER": "client_verify_server",
         "ORCH_FORWARDED_ALLOW_IPS": "forwarded_allow_ips", "ORCH_PUBLIC_SCHEME": "public_scheme",
         "ORCH_ACCESS_PASSWORD": "access_password", "ORCH_EXTERNAL_AUTH_MODE": "external.auth.mode",
+        "ORCH_ACCESS_TOKEN_TTL": "access_token_ttl",
+        "ORCH_EXTERNAL_AUTH_TOKEN_ENV": "external.auth.token_env",
         "ORCH_SSL_CERTFILE": "ssl_certfile", "ORCH_SSL_KEYFILE": "ssl_keyfile",
         "ORCH_SSL_KEYFILE_PASSWORD": "ssl_keyfile_password", "ORCH_SSL_CA_CERTS": "ssl_ca_certs",
+        "ORCH_SSL_CRL_FILE": "ssl_crl_file",
         "REGISTRY_CA_FILE": "agent_registry.ca_file", "REGISTRY_CLIENT_CERT": "agent_registry.client_cert",
         "REGISTRY_CLIENT_KEY": "agent_registry.client_key",
+        "REGISTRY_CLIENT_KEY_PASSWORD_ENV": "agent_registry.client_key_password_env",
         "AGENT_REGISTRY_URL": "agent_registry_url", "PERSISTENCE_MODE": "persistence_mode",
     }
     for name, key in aliases.items():

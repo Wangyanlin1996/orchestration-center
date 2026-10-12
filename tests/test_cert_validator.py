@@ -216,6 +216,12 @@ class TestConfObj:
         obj = ConfObj.as_object({"ssl_crl_file": ""})
         assert obj.ssl_crl_file == ""
 
+    def test_as_object_missing_crl_key_defaults_to_empty(self):
+        # Revocation checking is opt-in: an absent key must not invent a CRL
+        # path that CertValidator would then demand on disk.
+        obj = ConfObj.as_object({})
+        assert obj.ssl_crl_file == ""
+
     def test_get_crl_list_empty_when_none(self):
         obj = ConfObj()
         obj.crl_list_data = None
