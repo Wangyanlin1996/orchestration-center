@@ -31,11 +31,14 @@ def browser_gateway(request, tmp_path, monkeypatch):
     monkeypatch.setattr(context, "_persistence_context", StorageContext(FilePersistenceBackend(storage=storage)))
     monkeypatch.setattr(file_handlers, "get_workflow_storage", lambda: storage)
     conf = {"ip": "0.0.0.0", "enable_https": "true", "verify_client": str(request.param).lower(),
-            "external.auth.mode": "auto", "persistence_mode": "file", "public_scheme": "http"}
+            "external.auth.mode": "auto", "persistence_mode": "file", "public_scheme": "http",
+            "access_password": hashlib.sha256(b"SyntheticUser9!").hexdigest()}
     monkeypatch.setattr(auth, "get_conf", lambda: conf)
     monkeypatch.setattr(app_server, "get_conf", lambda: conf)
     monkeypatch.setattr(auth, "_session_store", auth._SessionStore())
     monkeypatch.delenv("TESTING", raising=False)
+    from orchestrate.server import middleware
+    monkeypatch.setattr(middleware, "limiter", middleware.strategies.MovingWindowRateLimiter(middleware.storage.MemoryStorage()))
     token = "synthetic-machine-token-000000000000000"
     monkeypatch.setenv("ORCH_API_TOKEN", token)
     cert, key = _tls_files(tmp_path)
@@ -92,28 +95,56 @@ def browser_gateway(request, tmp_path, monkeypatch):
         assert not thread.is_alive()
 
 
+def test_removed_switches_do_not_open_a_real_tls_gateway(browser_gateway, monkeypatch):
+    gateway, _, _, conf, _ = browser_gateway
+    conf.update({"ip": "127.0.0.1", "security.dev_insecure_mode": "true"})
+    monkeypatch.setenv("TESTING", "true")
+    with httpx.Client(trust_env=False) as browser:
+        assert browser.get(gateway + "/api/v1/executions").status_code == 401
+        assert browser.get(gateway + "/rest/v1/orchestrate/workflows").status_code == 401
+        issued = browser.post(gateway + "/api/v1/auth/token", json={"username": "admin", "password": "SyntheticUser9!"})
+        assert issued.status_code == 200, issued.text
+        bearer = {"Authorization": "Bearer " + issued.json()["access_token"]}
+        assert browser.get(gateway + "/api/v1/executions", headers=bearer).status_code == 200
+
+
 def test_proxy_certificate_cannot_authenticate_a_browser_for_machine_apis(browser_gateway):
     gateway, backend, upstream, conf, token = browser_gateway
     with httpx.Client(trust_env=False) as browser:
         for headers in ({}, {"Authorization": "Bearer " + token},
                         {"Cookie": "session_token=synthetic-session", BROWSER_GATEWAY_HEADER: ""}):
             response = browser.get(gateway + "/api/v1/executions", headers=headers)
-            assert response.status_code == 403
+            assert response.status_code == 401
             assert "boundary-canary" not in response.text
-    # Same TLS peer identity is still a valid DIRECT machine credential.
+        issued = browser.post(gateway + "/api/v1/auth/token", json={"username": "admin", "password": "SyntheticUser9!"})
+        assert issued.status_code == 200, issued.text
+        bearer = {"Authorization": "Bearer " + issued.json()["access_token"]}
+        assert browser.get(gateway + "/api/v1/executions", headers=bearer).status_code == 200
+        assert browser.post(gateway + "/api/v1/auth/logout", headers=bearer).status_code == 200
+        assert browser.get(gateway + "/api/v1/executions", headers=bearer).status_code == 401
+    # TLS peer identity is no longer a default application account credential.
     with httpx.Client(verify=upstream, trust_env=False) as machine:
         response = machine.get(backend + "/api/v1/executions", headers={"Authorization": "Bearer " + token})
-        assert response.status_code == 200 and "boundary-canary" in response.text
+        assert response.status_code == 401
         if conf["verify_client"] == "true":
+            assert machine.get(backend + "/api/v1/executions").status_code == 401
+            conf["external.auth.mode"] = "mtls"
             assert machine.get(backend + "/api/v1/executions").status_code == 200
+            with httpx.Client(trust_env=False) as browser:
+                assert browser.get(gateway + "/api/v1/executions").status_code == 401
+                issued = browser.post(gateway + "/api/v1/auth/token", json={"username": "admin", "password": "SyntheticUser9!"})
+                assert issued.status_code == 200
+                assert browser.get(gateway + "/api/v1/executions", headers={"Authorization": "Bearer " + issued.json()["access_token"]}).status_code == 200
 
 
 def test_browser_gateway_requires_independent_user_authentication(browser_gateway):
     gateway, _, _, conf, _ = browser_gateway
     with httpx.Client(trust_env=False) as browser:
         path = gateway + "/rest/v1/orchestrate/execution-records"
+        conf.pop("access_password")
         response = browser.get(path)
         assert response.status_code == 503 and "boundary-canary" not in response.text
+        assert browser.post(gateway + "/api/v1/auth/token", json={"username": "admin", "password": "SyntheticUser9!"}).status_code == 503
         conf["access_password"] = hashlib.sha256(b"SyntheticUser9!").hexdigest()
         assert browser.get(path).status_code == 401
         response = browser.post(gateway + "/rest/v1/orchestrate/auth/login",
@@ -121,10 +152,17 @@ def test_browser_gateway_requires_independent_user_authentication(browser_gatewa
         assert response.status_code == 200, response.text
         response = browser.get(path)
         assert response.status_code == 200 and "boundary-canary" in response.text
+        assert browser.get(gateway + "/api/v1/executions").status_code == 401
+        bearer = {"Authorization": "Bearer " + browser.cookies.get("session_token")}
+        assert browser.get(gateway + "/api/v1/executions", headers=bearer).status_code == 200
 
 
 def test_verify_false_only_disables_server_certificate_verification(browser_gateway):
     _, backend, upstream, conf, token = browser_gateway
+    with httpx.Client(verify=upstream, trust_env=False) as authenticated_transport:
+        issued = authenticated_transport.post(backend + "/api/v1/auth/token", json={"username": "admin", "password": "SyntheticUser9!"})
+        assert issued.status_code == 200
+        token = issued.json()["access_token"]
     with httpx.Client(verify=False, trust_env=False) as client:
         if conf["verify_client"] == "true":
             # A valid Bearer cannot bypass the server's TLS client certificate gate.

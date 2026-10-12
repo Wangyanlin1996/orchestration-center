@@ -162,6 +162,19 @@ class TestRecordStartupLog:
 
 
 class TestCustomUvicornServer:
+    def test_proxy_trust_is_scoped_to_the_server_config(self, monkeypatch):
+        from orchestrate.start import CustomUvicornServer
+        monkeypatch.setenv("FORWARDED_ALLOW_IPS", "ambient-value")
+        conf_obj = MagicMock()
+        conf_obj.verify_client = ssl.CERT_NONE
+        with patch("orchestrate.start.uvicorn") as mocked, \
+             patch("orchestrate.start.load_cert_password", return_value=b"synthetic"), \
+             patch("orchestrate.start.CipherConverter.convert", return_value=None), \
+             patch("orchestrate.start.record_startup_log"):
+            CustomUvicornServer({"forwarded_allow_ips": "127.0.0.1"}, conf_obj).run()
+            assert mocked.Config.call_args.kwargs["forwarded_allow_ips"] == "127.0.0.1"
+            assert os.environ["FORWARDED_ALLOW_IPS"] == "ambient-value"
+
     def test_init(self):
         from orchestrate.start import CustomUvicornServer
         server_config = {"ip": "0.0.0.0", "port": "8080"}
@@ -173,16 +186,14 @@ class TestCustomUvicornServer:
     def test_run_http_disabled(self):
         """When enable_https=false, main() calls uvicorn.run directly.
 
-        ip=127.0.0.1 with no credential is the credential-less loopback cell, which
-        the fail-closed startup check (security_preflight) only lets through with
-        security.dev_insecure_mode=true -- see tests/test_security_preflight.py.
+        HTTP and loopback binding still require an account credential.
         """
         from orchestrate.start import main
         with patch("orchestrate.start.get_conf") as mock_conf, \
              patch("orchestrate.start.uvicorn") as mock_uvicorn:
             mock_conf.return_value = {
                 "enable_https": "false", "ip": "127.0.0.1", "port": "5001",
-                "security.dev_insecure_mode": "true",
+                "access_password": "synthetic-hash", "persistence_mode": "file",
             }
             main()
             mock_uvicorn.run.assert_called_once()

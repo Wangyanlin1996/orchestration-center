@@ -24,7 +24,7 @@ def test_machine_token_is_independent_of_user_cookie_and_transport(protocol, tmp
     monkeypatch.setenv("ORCH_API_TOKEN", TOKEN)
     monkeypatch.setattr(auth, "get_conf", lambda: {
         "enable_https": protocol == "https", "verify_client": "false",
-        "external.auth.mode": "auto",
+        "external.auth.mode": "bearer",
     })
     options, verify = {}, True
     if protocol == "https":

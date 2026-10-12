@@ -33,9 +33,8 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # A browser gateway is not a machine API gateway. Its upstream client
-    # certificate authenticates nginx, never an anonymous browser caller.
-    location ^~ /api/orchestrate/api/ { return 404; }
+    # Public API requests are forwarded too, but must carry the original
+    # caller's account Bearer. The upstream certificate only identifies nginx.
 
     # Gateway prefix consumed by workflow-designer/src/service/api.js's
     # defaultGateway ('/api/orchestrate'). Strip the prefix and forward to

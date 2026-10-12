@@ -2,7 +2,7 @@
 # All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Machine API authentication, independent of browser sessions and transport."""
+"""Public API account authentication and explicitly selected legacy providers."""
 
 import hmac
 import importlib
@@ -18,16 +18,15 @@ from common.custom import HandlerRegistry, InterfaceType
 @dataclass(frozen=True)
 class MachineIdentity:
     subject: str
+    role: str | None = None
 
 
 def external_auth_mode(conf: dict) -> str:
-    mode = str(conf.get("external.auth.mode", "auto")).strip().lower()
+    mode = str(conf.get("external.auth.mode", "user")).strip().lower()
     if mode == "auto":
-        mtls = (str(conf.get("enable_https", "true")).lower() == "true"
-                and str(conf.get("verify_client", "true")).lower() == "true")
-        return "mtls" if mtls else "bearer"
-    if mode not in {"mtls", "bearer", "custom"}:
-        raise ValueError("external.auth.mode must be auto, mtls, bearer or custom")
+        return "user"
+    if mode not in {"user", "mtls", "bearer", "custom"}:
+        raise ValueError("external.auth.mode must be auto, user, mtls, bearer or custom")
     return mode
 
 
@@ -38,6 +37,9 @@ def api_token(conf: dict) -> str:
 
 def external_auth_configured(conf: dict) -> bool:
     mode = external_auth_mode(conf)
+    if mode == "user":
+        from orchestrate.server.security_preflight import credential_configured
+        return credential_configured(conf)
     if mode == "mtls":
         return (str(conf.get("enable_https", "true")).lower() == "true"
                 and str(conf.get("verify_client", "true")).lower() == "true")
@@ -64,6 +66,11 @@ async def close_external_auth():
 
 async def authenticate_external(request: Request, conf: dict) -> MachineIdentity:
     mode = external_auth_mode(conf)
+    if mode == "user":
+        from orchestrate.server.auth import require_user_authentication, require_session_identity
+        require_user_authentication()
+        identity = require_session_identity(request, allow_cookie=False)
+        return MachineIdentity(identity.username, identity.role)
     if mode == "custom":
         try:
             identity = await _custom_handler().handle(request)

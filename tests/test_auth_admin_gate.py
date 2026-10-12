@@ -98,6 +98,8 @@ class TestRequireAdmin:
             require_admin(_make_request("not-a-real-token"))
         assert exc_info.value.status_code == 403
 
-    def test_noop_when_auth_disabled(self, monkeypatch):
+    def test_unconfigured_auth_fails_closed_without_middleware(self, monkeypatch):
         monkeypatch.setattr(auth_module, "is_auth_enabled", lambda: False)
-        require_admin(_make_request(None))  # must not raise
+        with pytest.raises(HTTPException) as exc_info:
+            require_admin(_make_request(None))
+        assert exc_info.value.status_code == 503

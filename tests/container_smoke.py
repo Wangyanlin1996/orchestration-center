@@ -15,7 +15,6 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 CANARY = "OC_BUILD_SECRET_CANARY_MUST_NOT_SHIP"
-TOKEN = "test-only-container-machine-token-000000000000000"
 
 
 def command(*args, check=True):
@@ -81,7 +80,7 @@ def run():
                 args = ["docker", "run", "-d", "-p", "127.0.0.1::5001",
                         "-v", f"{volume}:/opt/orchestration-center/data",
                         "-e", "ORCH_VERIFY_CLIENT=false", "-e", f"ORCH_ENABLE_HTTPS={str(secure).lower()}",
-                        "-e", f"ORCH_API_TOKEN={TOKEN}", "-e", "ORCH_ACCESS_PASSWORD=" + hashlib.sha256(b"ContainerUser9!").hexdigest()]
+                        "-e", "ORCH_ACCESS_PASSWORD=" + hashlib.sha256(b"ContainerUser9!").hexdigest()]
                 if secure:
                     args += ["-v", f"{pki}:/opt/orchestration-center/etc/ssl:ro"]
                 container = command(*args, image).stdout.strip()
@@ -113,8 +112,14 @@ def run():
                     assert len(imported.json()["data"]["steps"]) == 3
                     assert client.get("/rest/v1/orchestrate/workflows").status_code == 200
                     assert client.get("/api/v1/does-not-exist").status_code == 401
-                    assert client.get("/api/v1/does-not-exist", headers={"Authorization": "Bearer " + TOKEN}).status_code == 404
-            print("PASS: secret-free image, fail-closed startup, HTTP/HTTPS, login, machine auth, readonly PKI, probes")
+                    issued = client.post("/api/v1/auth/token", json={"username": "admin", "password": "ContainerUser9!"})
+                    assert issued.status_code == 200, issued.text
+                    assert "set-cookie" not in issued.headers
+                    bearer = {"Authorization": "Bearer " + issued.json()["access_token"]}
+                    assert client.get("/api/v1/does-not-exist", headers=bearer).status_code == 404
+                    assert client.post("/api/v1/auth/logout", headers=bearer).status_code == 200
+                    assert client.get("/api/v1/does-not-exist", headers=bearer).status_code == 401
+            print("PASS: secret-free image, fail-closed startup, HTTP/HTTPS, account Bearer, readonly PKI, probes")
         finally:
             for container in containers:
                 command("docker", "rm", "-f", container, check=False)

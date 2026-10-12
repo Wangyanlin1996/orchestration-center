@@ -233,10 +233,20 @@ def test_live_http_https_auth_workflow_and_execution_apis(live_mysql, sample_pso
                 assert login.status_code == 200 and login.json()["data"]["must_change_password"] is True
                 changed = client.post(base + "/auth/change-password", json={"old_password": "SmokeAdmin9!", "new_password": "ChangedAdmin9!"})
                 assert changed.status_code == 200
+                assert client.get(base + "/workflows").status_code == 401
+                assert client.post(base + "/auth/login", json={"username": "admin", "password": "ChangedAdmin9!"}).status_code == 200
+                public_base = base.removesuffix("/rest/v1/orchestrate") + "/api/v1"
+                issued = client.post(public_base + "/auth/token", json={"username": "admin", "password": "ChangedAdmin9!"})
+                assert issued.status_code == 200, issued.text
+                bearer = {"Authorization": "Bearer " + issued.json()["access_token"]}
                 saved = client.post(base + "/workflows", json={"psop": sample_psop_dict})
                 assert saved.status_code == 201
                 psop_id = saved.json()["data"]["workflow_id"]
                 assert client.get(base + f"/workflows/{psop_id}").json()["data"]["id"] == psop_id
+                assert client.get(public_base + f"/orchestrate/psop/{psop_id}").status_code == 401
+                assert client.get(public_base + f"/orchestrate/psop/{psop_id}", headers=bearer).json()["data"]["id"] == psop_id
+                assert client.post(public_base + "/auth/logout", headers=bearer).status_code == 200
+                assert client.get(public_base + f"/orchestrate/psop/{psop_id}", headers=bearer).status_code == 401
                 assert any(row["workflow_id"] == psop_id for row in client.get(base + "/workflows").json()["data"])
                 # POST uses the same upsert handler when editing an existing workflow.
                 updated = {**sample_psop_dict, "name": "更新工作流"}

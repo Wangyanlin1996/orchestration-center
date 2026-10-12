@@ -22,7 +22,7 @@ def test_frontend_hook_is_executable_in_image():
 def test_browser_proxies_narrow_access_and_overwrite_gateway_marker():
     nginx = (ROOT / "workflow-designer/nginx.conf.template").read_text(encoding="utf-8")
     vite = (ROOT / "workflow-designer/vite.config.js").read_text(encoding="utf-8")
-    assert "location ^~ /api/orchestrate/api/ { return 404; }" in nginx
+    assert "location ^~ /api/orchestrate/api/ { return 404; }" not in nginx
     assert 'proxy_set_header X-OpenAN-Browser-Gateway "1";' in nginx
     assert "'X-OpenAN-Browser-Gateway': '1'" in vite
 

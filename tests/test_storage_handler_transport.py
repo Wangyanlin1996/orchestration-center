@@ -19,7 +19,7 @@ from test_storage_http_transport import _tls_files
 
 @pytest.mark.parametrize("mode", ["mysql", "postgresql"])
 @pytest.mark.parametrize("transport", ["http", "https"])
-def test_handler_crud_uses_one_owned_connection_source(mode, transport, tmp_path, monkeypatch, sample_psop_dict):
+def test_handler_crud_uses_one_owned_connection_source(mode, transport, tmp_path, monkeypatch, sample_psop_dict, account_session):
     import psycopg2
     from common.util import persistence_mode
     from database.utils import mysql_connection
@@ -84,7 +84,6 @@ def test_handler_crud_uses_one_owned_connection_source(mode, transport, tmp_path
     monkeypatch.setattr(context, "_persistence_context", storage)
     for attr in ("_save_handle", "_delete_handle", "_retrieval"):
         monkeypatch.setattr(SharedHandlers, attr, None)
-    monkeypatch.setattr(auth, "is_auth_enabled", lambda: False)
     monkeypatch.setattr(server, "audit_logger", MagicMock())
     monkeypatch.setattr(middleware, "limiter", MovingWindowRateLimiter(MemoryStorage()))
 
@@ -101,8 +100,6 @@ def test_handler_crud_uses_one_owned_connection_source(mode, transport, tmp_path
     assert len(rows["execution_records"]) == 1
     record_id = next(iter(rows["execution_records"]))
 
-    monkeypatch.setenv("ORCH_API_TOKEN", "transport-regression-token-000000000000")
-    monkeypatch.setattr(auth, "get_conf", lambda: {"external.auth.mode": "bearer"})
     options, verify = {}, True
     if transport == "https":
         cert, key = _tls_files(tmp_path)
@@ -122,7 +119,7 @@ def test_handler_crud_uses_one_owned_connection_source(mode, transport, tmp_path
         assert runner.started
         with httpx.Client(base_url=f"{transport}://127.0.0.1:{port}", verify=verify,
                           trust_env=False, timeout=5,
-                          headers={"Authorization": "Bearer transport-regression-token-000000000000"}) as client:
+                          headers=account_session) as client:
             base = "/rest/v1/orchestrate"
             response = client.post(base + "/workflows", json={"psop": sample_psop_dict})
             assert response.status_code == 201, response.text

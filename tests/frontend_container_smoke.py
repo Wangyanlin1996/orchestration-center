@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from urllib.error import URLError, HTTPError
+from urllib.error import URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,15 +87,16 @@ def run():
                 assert f"proxy_pass {'https' if secure else 'http'}://orchestration-center:5001/" in config
                 if secure:
                     assert "proxy_ssl_verify on;" in config
-                # Even a permissive backend must not make the browser gateway
-                # expose the machine surface. Exercise nginx URI normalization.
+                # Public APIs reach backend account authentication unchanged.
+                # Exercise nginx URI normalization and marker/header forwarding.
                 for path in ("api/v1/executions", "api%2Fv1/executions", "other/../api/v1/executions"):
-                    try:
-                        opener.open(f"http://{address}/api/orchestrate/{path}", timeout=3)
-                    except HTTPError as exc:
-                        assert exc.code == 404
-                    else:
-                        raise AssertionError("Browser gateway exposed a machine route")
+                    request = Request(f"http://{address}/api/orchestrate/{path}",
+                                      headers={"Authorization": "Bearer synthetic-account-token",
+                                               "X-OpenAN-Browser-Gateway": ""})
+                    with opener.open(request, timeout=3) as response:
+                        result = json.load(response)
+                    assert result == {"path": "/api/v1/executions",
+                                      "authorization": "Bearer synthetic-account-token", "browser_gateway": "1"}
                 command("docker", "rm", "-f", frontend, backend)
                 containers.remove(frontend)
                 containers.remove(backend)

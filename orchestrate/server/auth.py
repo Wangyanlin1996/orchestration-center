@@ -23,14 +23,15 @@ Internal API (``/rest/v1/orchestrate/*``):
     are in-memory with configurable TTL.
 
 External API (``/api/v1/*``):
-    Independently authenticated using a machine Bearer token, verified mTLS,
-    or a configured business authentication extension. Browser cookies never
-    substitute for machine credentials.
+    Account Bearer tokens share identity, TTL and revocation with user sessions.
+    Explicit legacy machine authentication is available for direct integrations.
+    Cookies alone never authorize the public API.
 """
 
 import secrets
 import threading
 import time
+from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
 from loguru import logger
@@ -53,8 +54,14 @@ _PUBLIC_AUTH_PATHS = {
 # Default token lifetime: 12 hours.
 _DEFAULT_TTL = 12 * 60 * 60
 
-# Session token is carried as an httpOnly cookie, scoped to the internal API
-# path so it's never sent to unrelated routes. Cookie name intentionally
+
+@dataclass(frozen=True)
+class SessionIdentity:
+    username: str
+    role: str
+
+# Browser sessions use an httpOnly cookie; public APIs require an explicit
+# Bearer header even if a cookie is present. Cookie name intentionally
 # differs from the old "?access_token=..." query param name it replaces
 # (see extract_token -- that scheme is no longer accepted at all), to make
 # the two easy to tell apart in logs/captures from before this migration.
@@ -116,12 +123,7 @@ def is_auth_enabled() -> bool:
     closed (503) instead of treating "cannot determine" as "auth disabled".
     In file mode: checks ``access_password`` in server.conf.
 
-    Returns False when TESTING environment variable is set.
     """
-    import os
-    if os.environ.get('TESTING', '').lower() in ('true', '1', 'yes'):
-        return False
-
     conf = get_conf()
     storage = current_context()
     if storage.has_users:
@@ -137,7 +139,8 @@ def is_auth_enabled() -> bool:
 def _get_ttl() -> int:
     conf = get_conf()
     try:
-        return int(conf.get("access_token_ttl", _DEFAULT_TTL))
+        ttl = int(conf.get("access_token_ttl", _DEFAULT_TTL))
+        return ttl if ttl > 0 else _DEFAULT_TTL
     except (ValueError, TypeError):
         return _DEFAULT_TTL
 
@@ -157,8 +160,15 @@ class _SessionStore:
         # token -> (username, role, expiry epoch)
         self._tokens: dict[str, tuple[str, str, float]] = {}
         self._lock = threading.Lock()
+        self._revision = 0
+        self._user_revocations: dict[str, int] = {}
 
-    def create(self, username: str, role: str = "user") -> tuple[str, int]:
+    def login_revision(self) -> int:
+        """Fence a password check that can run concurrently with account changes."""
+        with self._lock:
+            return self._revision
+
+    def create(self, username: str, role: str = "user", *, login_revision: int | None = None) -> tuple[str, int]:
         """Create a new session token for the given user and role.
 
         ``role`` is stamped once at login rather than re-resolved per
@@ -169,6 +179,8 @@ class _SessionStore:
         ttl = _get_ttl()
         expiry = time.time() + ttl
         with self._lock:
+            if login_revision is not None and self._user_revocations.get(username, 0) > login_revision:
+                raise HTTPException(401, "Account changed during login; please log in again")
             self._cleanup_locked()
             self._tokens[token] = (username, role, expiry)
         logger.info(f"Session token created for user '{username}' (role={role}), expires in {ttl}s")
@@ -216,6 +228,25 @@ class _SessionStore:
         with self._lock:
             self._tokens.pop(token, None)
 
+    def revoke_user(self, username: str) -> None:
+        """Credential changes/deletion invalidate both browser and API tokens."""
+        with self._lock:
+            self._revision += 1
+            self._user_revocations[username] = self._revision
+            for token, entry in list(self._tokens.items()):
+                if entry[0] == username:
+                    del self._tokens[token]
+
+    def identity(self, token: str | None) -> SessionIdentity | None:
+        with self._lock:
+            entry = self._tokens.get(token)
+            if entry is None:
+                return None
+            if time.time() >= entry[2]:
+                del self._tokens[token]
+                return None
+            return SessionIdentity(entry[0], entry[1])
+
     def _cleanup_locked(self) -> None:
         """Remove expired tokens (caller must hold the lock)."""
         now = time.time()
@@ -232,30 +263,62 @@ def get_session_store() -> _SessionStore:
     return _session_store
 
 
+def extract_bearer_token(request: Request) -> str | None:
+    """One explicit Authorization value; no cookies, query or duplicate fallback."""
+    values = request.headers.getlist("authorization")
+    parts = values[0].split() if len(values) == 1 else []
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1]
+    return None
+
+
 def extract_token(request: Request) -> str | None:
-    """Extract the session token from the session cookie, falling back to
-    the Authorization header for non-browser clients (curl, scripts).
+    """Extract an explicit Bearer header, otherwise the browser session cookie.
 
     No query-param fallback: that was the "?access_token=..." scheme this
     migration replaces, which leaked the token into server access logs,
     browser history, and Referer headers on every SSE call (see #39). The
     frontend no longer sends it; EventSource picks up the cookie instead.
     """
+    # Explicit headers take precedence, even malformed ones: do not silently
+    # act as the cookie owner when a script supplies another credential.
+    if "authorization" in request.headers:
+        return extract_bearer_token(request)
     cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie_token:
         return cookie_token
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        return auth_header[7:].strip()
     return None
+
+
+def require_user_authentication() -> None:
+    try:
+        enabled = is_auth_enabled()
+    except RuntimeError:
+        raise HTTPException(503, "Authentication backend unavailable") from None
+    except StorageError as exc:
+        raise storage_http_exception(exc) from exc
+    if not enabled:
+        raise HTTPException(503, "Account authentication is not configured")
+
+
+def require_session_identity(request: Request, *, allow_cookie: bool = True,
+                             allow_password_change: bool = False) -> SessionIdentity:
+    token = extract_token(request) if allow_cookie else extract_bearer_token(request)
+    identity = get_session_store().identity(token)
+    if identity is None:
+        raise HTTPException(401, "Valid login token required", headers={"WWW-Authenticate": "Bearer"})
+    if identity.role not in {"admin", "user"}:
+        raise HTTPException(403, "Account role is not permitted")
+    if username_must_change_password(identity.username) and not allow_password_change:
+        raise HTTPException(403, "Password change required")
+    return identity
 
 
 def require_admin(request: Request) -> None:
     """FastAPI dependency: reject the request unless the session role is 'admin'.
 
-    No-op when auth is disabled: ``auth_middleware`` already lets every
-    request through in that mode, so re-checking here would just lock
-    everyone out of a deployment that has authentication turned off.
+    An unconfigured account backend fails closed, including direct invocation
+    of this dependency; middleware is not the sole enforcement boundary.
     """
     try:
         auth_enabled = is_auth_enabled()
@@ -266,7 +329,7 @@ def require_admin(request: Request) -> None:
     except StorageError as e:
         raise storage_http_exception(e) from e
     if not auth_enabled:
-        return
+        raise HTTPException(status_code=503, detail="Account authentication is not configured")
     token = extract_token(request)
     role = _session_store.get_role(token) if token else None
     if role != "admin":
@@ -315,15 +378,16 @@ _PROTECTED_PATH_PREFIXES = ("/rest/v1/orchestrate", "/psops")
 
 
 async def auth_middleware(request: Request, call_next):
-    """User sessions for internal API; separate machine identity for external API.
+    """Shared account identity with explicit public-API Bearer transport.
 
     Internal API (``/rest/v1/orchestrate/*``) and the legacy ``/psops`` alias:
         Token-based auth via database-backed users.  Public auth endpoints
         (login/check/register) are exempt.
 
     External API (``/api/v1/*``):
-        Independently checked using Bearer, verified mTLS transport evidence
-        or the configured custom authentication provider.
+        Defaults to the same login-token validation. Direct integrations may
+        explicitly select legacy machine authentication. Browser gateways never
+        use their own TLS certificate as the original caller's identity.
     """
     path = request.url.path
     from orchestrate.server.gateway_policy import is_browser_gateway_request
@@ -333,18 +397,28 @@ async def auth_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
+    if path == "/api/v1/auth/token" and request.method == "POST":
+        # Only credential verification/token issuance is anonymous, not /auth/*.
+        return await call_next(request)
+
     if path == "/api/v1" or path.startswith("/api/v1/"):
-        if browser_gateway:
-            return JSONResponse(status_code=403, content=error(403, "Machine APIs are not exposed by the browser gateway"))
         from orchestrate.server.external_auth import authenticate_external
-        from orchestrate.server.security_preflight import dev_insecure_mode_enabled, is_loopback_bind
         conf = get_conf()
-        if not (dev_insecure_mode_enabled(conf) and is_loopback_bind(str(conf.get("ip", "127.0.0.1")))):
-            try:
+        try:
+            if path == "/api/v1/auth/logout":
+                require_user_authentication()
+                request.state.user_identity = require_session_identity(
+                    request, allow_cookie=False, allow_password_change=True)
+            else:
                 request.state.machine_identity = await authenticate_external(request, conf)
-            except HTTPException as exc:
-                return JSONResponse(status_code=exc.status_code, content=error(exc.status_code, exc.detail),
-                                    headers=exc.headers)
+                if browser_gateway:
+                    # A caller may forge this marker: add requirements,
+                    # never select an alternative authentication provider.
+                    require_user_authentication()
+                    request.state.user_identity = require_session_identity(request, allow_cookie=False)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content=error(exc.status_code, exc.detail),
+                                headers=exc.headers)
         return await call_next(request)
 
     # Only the internal API (and its legacy alias) needs application-layer auth.
@@ -367,28 +441,17 @@ async def auth_middleware(request: Request, call_next):
         return JSONResponse(status_code=mapped.status_code, content=error(mapped.status_code, mapped.detail))
 
     if not auth_enabled:
-        if browser_gateway:
-            from orchestrate.server.security_preflight import dev_insecure_mode_enabled, is_loopback_bind
-            conf = get_conf()
-            if not (dev_insecure_mode_enabled(conf) and is_loopback_bind(str(conf.get("ip", "127.0.0.1")))):
-                return JSONResponse(status_code=503, content=error(503, "Browser gateway requires user authentication"))
-        return await call_next(request)
+        return JSONResponse(status_code=503, content=error(503, "Account authentication is not configured"))
 
     if path in _PUBLIC_AUTH_PATHS:
         return await call_next(request)
 
-    token = extract_token(request)
-    if not _session_store.validate(token):
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content=error(401, "Unauthorized: valid token required"),
-        )
-
-    username = _session_store.get_username(token)
-    if username_must_change_password(username) and path not in _PASSWORD_CHANGE_EXEMPT_PATHS:
-        return JSONResponse(
-            status_code=status.HTTP_403_FORBIDDEN,
-            content=error(403, "Password change required", data={"must_change_password": True}),
-        )
+    try:
+        request.state.user_identity = require_session_identity(
+            request, allow_password_change=path in _PASSWORD_CHANGE_EXEMPT_PATHS)
+    except HTTPException as exc:
+        return JSONResponse(status_code=exc.status_code, content=error(exc.status_code, exc.detail,
+                            data={"must_change_password": True} if exc.detail == "Password change required" else None),
+                            headers=exc.headers)
 
     return await call_next(request)
