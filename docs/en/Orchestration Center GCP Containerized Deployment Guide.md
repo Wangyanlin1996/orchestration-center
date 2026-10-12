@@ -1,4 +1,6 @@
 <!--
+
+> Legacy / not supported with current service images: the instructions below are historical. `deploy-all.ps1` now fails before any cloud operation. It lacks current account bootstrap, complete model mounts, independent registry identity and Secret Manager injection. Use the current [Helm/Compose deployment contract](https://github.com/project-openan/openan-installation/blob/main/containerized/TRANSPORT_DEPLOYMENT.md); no current GCP acceptance is claimed.
 Copyright (c) 2026 Huawei Technologies Co., Ltd.
 All Rights Reserved.
 

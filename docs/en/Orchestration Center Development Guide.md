@@ -341,7 +341,7 @@ The internal API (`/rest/v1/orchestrate/*`) supports token-based authentication 
 
 **Database mode (`persistence_mode=postgresql` or `mysql`)**:
 - **User store**: `database/utils/user_store.py` -- CRUD operations on PostgreSQL/MySQL `users` table with versioned bcrypt password hashes
-- **Auto-seed**: `start.py` calls `seed_admin_if_empty()` on startup to create default admin (password: `OpenAN@2026`)
+- **First boot**: an empty SQL user store requires `OC_ADMIN_INITIAL_PASSWORD` or `admin_initial_password_file`; `seed_admin_if_empty()` creates `admin` from that secret. Existing users are not reset. Change the initial password in the UI and log in again.
 - **Registration**: `POST /auth/register` endpoint available, username format validated, password complexity checked on frontend
 - **User management**: `GET /auth/users` (list), `DELETE /auth/users/{username}` (delete, admin protected)
 - **Auth module**: `orchestrate/server/auth.py` -- `SessionStore` maps token to (username, expiry), `auth_middleware`
@@ -351,12 +351,12 @@ The internal API (`/rest/v1/orchestrate/*`) supports token-based authentication 
 **File mode (`persistence_mode=file`)**:
 - **Configuration**: Set `access_password` (SHA-256 hash) and `access_token_ttl` in `etc/conf/server.conf`
 - Single `admin` user with password from config, no registration or user management
-- Falls back to this mode when database is not available
+- Account storage does not fall back on database failure; unavailable authentication fails closed.
 
 **Common to both modes**:
-- **Token delivery**: session cookie (`Secure` when `enable_https=true`, `HttpOnly`, `SameSite=Lax`), or `Authorization: Bearer <token>` for non-browser clients. Query-parameter tokens are no longer accepted; `EventSource` picks up the cookie automatically
+- **Token delivery**: internal APIs accept an HttpOnly, SameSite=Lax cookie or Bearer header. Secure follows `public_scheme` or the trusted public request scheme, not backend TLS alone. EventSource uses the cookie. Public `/api/v1/*` requires an explicit Bearer from `POST /api/v1/auth/token`; cookies and URL tokens do not authenticate it.
 - **Password hashing**: the frontend sends the plaintext password over TLS; the backend hashes it (per-user salt in DB mode, or against the configured SHA-256 in file mode)
-- **Disable**: When `access_password` is empty and no users exist, authentication is disabled (backward compatible)
+- **Required**: no anonymous mode, loopback exemption or TESTING bypass. Missing account configuration rejects startup; runtime unavailability returns 503. Password changes, deletion and logout revoke sessions; API tokens have the same TTL.
 
 ### 6.2 TLS/HTTPS Configuration
 

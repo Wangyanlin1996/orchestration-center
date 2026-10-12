@@ -32,7 +32,7 @@ SPDX-License-Identifier: Apache-2.0
   - **执行指定工作流**：根据已知的 PSOP ID 启动执行，通过 SSE 实时推送执行进度与结果。
   - **查询执行结果**：根据执行 ID 获取工作流执行记录的详细信息。
 
-  所有接口基础路径为 **`/api/v1`**。
+  公开集成接口使用 **`/api/v1`**。内部浏览器/沙箱接口使用 **`/rest/v1/orchestrate`**；下文完整路径不要再拼接 `/api/v1`。
 
 ### 响应格式
 
@@ -68,7 +68,7 @@ SPDX-License-Identifier: Apache-2.0
 - **数据库模式（PostgreSQL/MySQL）**：用户存储在数据库中，使用版本化密码哈希。支持用户管理；自助注册默认关闭，可通过 `auth.register.enabled=true` 显式开启。
 - **文件模式**：通过 `server.conf` 的 `access_password` 配置单一密码，用户名固定为 `admin`。
 
-设置 `access_password`（文件模式）或 `users` 表有用户（PostgreSQL/MySQL 模式）时认证开启。开启后所有内部 API 请求必须携带有效令牌。
+HTTP 与 HTTPS 均强制认证。file 模式须配置密码哈希；SQL 空用户库首次引导须提供 `OC_ADMIN_INITIAL_PASSWORD` 或 `admin_initial_password_file`。缺配置拒绝启动，账号后端故障返回 503 而非放行匿名请求。首次在网页完成改密并重新登录后，才能获取公开 API Token。
 
 **登录：**
 ```bash
@@ -863,10 +863,10 @@ for line in resp.iter_lines(decode_unicode=True):
 
 | 方法 | URI | 描述 |
 |------|-----|------|
-| GET    | `/orchestrate/sandbox/verifications` | 查询持久化沙箱报告列表 |
-| GET    | `/orchestrate/sandbox/verifications/{verification_id}` | 获取已完成报告和事件 |
-| GET    | `/orchestrate/sandbox/verifications/{verification_id}/events` | 获取执行事件 |
-| DELETE | `/orchestrate/sandbox/verifications/{verification_id}` | 取消运行中的验证或删除持久化报告 |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications` | 查询持久化沙箱报告列表 |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}` | 获取已完成报告和事件 |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}/events` | 获取执行事件 |
+| DELETE | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}` | 取消运行中的验证或删除持久化报告 |
 
 已完成报告负载包含 `status`、`report` 和 `events`。`report` 包含结论、静态检查、执行路径、上下文链路、Stub 交互、风险、建议和可选错误信息。删除运行中验证时会先取消后台任务，再移除报告；删除操作不可恢复，响应返回 `data.deleted = <verification_id>`。
 
@@ -874,8 +874,8 @@ for line in resp.iter_lines(decode_unicode=True):
 
 | 方法 | URI | 描述 |
 |------|-----|------|
-| GET | `/orchestrate/sandbox/templates/{workflow_id}` | 查询已保存模板 |
-| PUT | `/orchestrate/sandbox/templates/{workflow_id}` | 替换已保存模板；请求体是 JSON 数组 |
+| GET | `/rest/v1/orchestrate/sandbox/templates/{workflow_id}` | 查询已保存模板 |
+| PUT | `/rest/v1/orchestrate/sandbox/templates/{workflow_id}` | 替换已保存模板；请求体是 JSON 数组 |
 
 模板最多 200 条；额外字段和非白名单响应变量会被拒绝。
 

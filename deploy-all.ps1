@@ -29,6 +29,10 @@ param(
     [string]$GCPProjectID = ""
 )
 
+# Fail before reading secrets, changing environment or contacting cloud APIs.
+# This legacy entrypoint has not adopted account bootstrap, model mounts and Secret Manager.
+throw "Legacy GCP deployment is not supported by the current authentication contract. Use the validated Helm/Compose installers in project-openan/openan-installation; do not run this script against a cluster."
+
 $ErrorActionPreference = "Continue"
 $PSNativeCommandUseErrorActionPreference = $false
 

@@ -242,41 +242,42 @@ cd {install_dir}/bin
 
 The Orchestration Center supports multiple security configurations depending on your deployment scenario. Choose the appropriate level based on your environment.
 
-### Development Mode (No Security)
+### Local HTTP Development (Login Required)
 
-For local development and testing, all security features can be disabled:
+HTTP disables encryption, not authentication. Use loopback for local tests:
 
 ```ini
-# etc/conf/server.conf
+ip=127.0.0.1
 enable_https=false
 verify_client=false
-access_password=
 persistence_mode=file
+access_password=<generated_password_hash>
 ```
 
-No login page, no HTTPS, no certificate required. All API endpoints are open.
+Run `python generate_access_password.py` for the single `admin` account. Keep actual
+server.conf local. Missing authentication configuration rejects startup; there is no anonymous development mode.
 
 ### Production Mode (HTTPS + Login)
 
-For deployment behind Nginx (recommended):
+Use a trusted public HTTPS endpoint. Backend HTTPS and incoming client-certificate verification are independent:
 
-1. **Configure Nginx with a CA-signed certificate** (from Let's Encrypt, Alibaba Cloud SSL, or your enterprise CA).
-2. **Enable login authentication** on the backend:
+```ini
+enable_https=true
+verify_client=false
+client_verify_server=true
+persistence_mode=postgresql
+# mysql is also supported; connection profiles are in etc/conf/db/
+```
 
-   ```ini
-   # etc/conf/server.conf
-   enable_https=true          # Backend uses HTTPS (optional if behind Nginx)
-   verify_client=false         # No mTLS required for browser access
-   access_password=<sha256_hash>  # Set to enable login
-   persistence_mode=postgresql   # Use database for user management
-   ```
+For an empty SQL user store, inject `OC_ADMIN_INITIAL_PASSWORD` from a secret manager or configure
+`admin_initial_password_file` to a protected password file. There is no built-in administrator password.
+Existing users are not reset and do not require a bootstrap password again. On first login, change the
+initial password in the web UI, then log in again before requesting an API token.
+Self-registration is disabled by default; enable `auth.register.enabled=true` only when intended.
 
-   Generate the password hash:
-   ```bash
-   python generate_access_password.py
-   ```
-
-3. **Users and registration**: When `persistence_mode=postgresql` or `mysql`, the system automatically creates a default `admin` user (password: `OpenAN@2026`) on first startup. Self-registration is disabled by default; set `auth.register.enabled=true` in PostgreSQL/MySQL mode to show the registration link. In `file` mode, registration is not available and only the `access_password` config is used.
+File mode uses `access_password` instead of SQL bootstrap. Database failures do not switch account
+storage to file or allow anonymous access. Set `public_scheme=https` when the browser-facing gateway
+uses HTTPS, even if its private backend connection uses HTTP.
 
 ### High-Security Mode (mTLS + HTTPS + Login)
 
@@ -287,8 +288,8 @@ For distributed deployments where services communicate over untrusted networks:
 enable_https=true
 verify_client=true            # Require client certificates for inbound connections
 client_verify_server=true      # Verify remote server certificates for outbound connections
-access_password=<sha256_hash>
 persistence_mode=postgresql
+# SQL first boot uses the protected initial-admin secret described above.
 ```
 
 All services must present valid certificates signed by a trusted CA during TLS handshake. See the [Certificate Generation Guide](#) for cross-team certificate setup.
@@ -300,7 +301,7 @@ All services must present valid certificates signed by a trusted CA during TLS h
 | `enable_https` | false | true | true |
 | `verify_client` | false | false | true |
 | `client_verify_server` | false (local self-signed testing only) | true | true |
-| `access_password` | empty | legacy SHA-256 or versioned bcrypt hash | legacy SHA-256 or versioned bcrypt hash |
+| Authentication | File password hash | SQL accounts; explicit first-boot secret | SQL accounts; explicit first-boot secret |
 | `persistence_mode` | file | postgresql | postgresql |
 | Registration | N/A | Disabled by default; set `auth.register.enabled=true` to enable | Disabled by default; set `auth.register.enabled=true` to enable |
 | Frontend | HTTP | HTTPS (via Nginx) | HTTPS (via Nginx) |
@@ -374,7 +375,7 @@ The host or IP in the client URL must appear in the server certificate SAN (see 
 
 | Approach | Suitable for | Notes |
 |---|---|---|
-| Skip certificate-chain verification (for example, engine-side `sslVerify=false`) | Development / testing | Skips only chain verification. Most clients (Java JDK HttpClient in particular) still perform hostname verification, so the certificate SAN must match the accessed address. The two checks are independent; disabling one does not disable the other |
+| Skip certificate-chain verification (for example, engine-side `sslVerify=false`) | Development / testing | Behavior depends on the client API. Current Java engine center helpers use connection-local `TlsPolicy.insecure()` to skip both certificate and hostname checks; strict mode requires trusted CA and matching SAN. Other clients may skip only the chain. Never change global JVM TLS settings or confuse skipping trust with a required mTLS identity. |
 | Import the trust certificate and keep verification on | Development / integration testing | Import this service's `trust.cer` into the client trust store and leave certificate verification enabled; use a trusted CA in production |
 
 Importing the trust store on a Java client:
@@ -390,6 +391,18 @@ If the server enables mutual TLS (`verify_client=true`), clients must additional
 
 
 ## 3. Usage
+
+### Sandbox Verification
+
+Open a saved workflow, or an unsaved/imported editor workflow, and select sandbox verification.
+Choose success/error/delay/negotiation and configure Stub responses. Start the run and inspect the
+report, execution path, context trace, risks and Stub interactions; save reusable Stub templates
+when appropriate. Reports can be listed and deleted; deleting an active run cancels it first.
+
+A sandbox `pass` verifies structure and scheduling with Stubs, not real Agent business correctness.
+Reports, Stub templates, PreFlow and solution packages remain file-backed even in SQL mode:
+persist the data directory across container replacement. Formal execution records are separate.
+See the [complete internal API paths](./Orchestration%20Center%20API%20Reference.md#8-sandbox-verification-interfaces).
 
 ### 3.1 Prerequisites
 
@@ -420,11 +433,11 @@ When executing a workflow, the system pushes execution progress in real time via
 
    Open a browser and navigate to the frontend URL (e.g., `http://localhost:3003` for development, or `https://your-domain.com` for production).
 
-2. **Login (if authentication is enabled)**
+2. **Login**
 
-   If `access_password` is configured or database persistence (`postgresql`/`mysql`) is enabled, the login page is displayed. Enter your username and password to access the main interface.
+   HTTP and HTTPS both require login. Use the configured account; an unavailable account backend fails closed.
 
-   - Default admin credentials: username `admin`, password `OpenAN@2026` (in PostgreSQL/MySQL mode, the admin user is auto-created on first startup).
+   - SQL bootstrap creates `admin` with your explicit first-boot secret. Change it in the UI and log in again; there is no fixed default password.
    - To register a new account (PostgreSQL/MySQL mode with `auth.register.enabled=true`), click the registration link on the login page.
    - In `file` mode, the username is `admin` and the password is the value set in `access_password` (before hashing).
    - To change the admin password in file mode, regenerate the hash: `python generate_access_password.py`

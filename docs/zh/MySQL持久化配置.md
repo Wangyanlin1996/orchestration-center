@@ -32,16 +32,14 @@ LONGTEXT，时间使用 DATETIME(6)，按 UTC 存取。MySQL 的 PSOP ID 上限�
    连接池、超时及 `MYSQL_SSL_CA` 也覆盖 JSON 配置；容器可全部使用环境变量，无需 JSON。
    缺少密码变量会报错；显式设置为空才允许无密码的临时测试实例。
    不再接受 JSON 中的明文或密文 `password`，只使用变量引用。
-3. 设置 `persistence_mode=mysql`，首次对外启动前先创建私有管理员密码，避免全新数据库
-   在 HTTP 启动安全预检时没有用户可认证：
+3. 设置 `persistence_mode=mysql`。SQL 空用户库通过秘密管理器注入 `OC_ADMIN_INITIAL_PASSWORD`，
+   或将 `admin_initial_password_file` 指向受保护的口令文件。运行 `python -m orchestrate.start`，
+   启动用此秘密创建 admin；已有账号不重置，也不再要求首次引导口令。
+4. 首次在网页改密，再重新登录并获取 API Token；数据库口令与应用账号、TLS/mTLS 独立。
 
-   ```bash
-   python -c "from database.utils.table_creation import create_tables; from database.utils.user_store import seed_admin_if_empty; import getpass; create_tables(); seed_admin_if_empty(getpass.getpass('Initial admin password: '))"
-   python -m orchestrate.start
-   ```
-
-   管理员首次登录必须改密。数据库密码不是应用登录密码；HTTPS/mTLS、应用认证仍按原有
-   配置工作。不要用关闭安全预检来替代账号初始化。
+可信管理员仍可在对外启动前离线调用 `create_tables()` 与
+`seed_admin_if_empty(getpass.getpass(...))` 预建账号，这是可选操作，不是正常引导的必需步骤。
+不要绕过安全预检。
 
 ## 连接参数
 

@@ -32,7 +32,7 @@ SPDX-License-Identifier: Apache-2.0
   - **Execute Specific Workflow**: Start execution based on a known PSOP ID, with real-time execution progress and results pushed via SSE.
   - **Query Execution Result**: Get detailed information about a workflow execution record by execution ID.
 
-  All API endpoints use the base path **`/api/v1`**.
+  Public integration endpoints use **`/api/v1`**. Internal browser/sandbox endpoints use **`/rest/v1/orchestrate`**; their complete paths must not be prefixed with `/api/v1`.
 
 ### Response Format
 
@@ -66,7 +66,7 @@ Internal and public APIs share account authentication by default, with two accou
 - **Database mode (PostgreSQL/MySQL)**: Users are stored in the database with versioned password hashes. User management is available; self-registration is disabled by default and requires `auth.register.enabled=true`.
 - **File mode**: A single password is configured via `access_password` in `server.conf`. Username is `admin` only.
 
-Authentication is enabled when `access_password` is set (file mode) or when the `users` table has at least one user (PostgreSQL/MySQL mode). When enabled, all internal API requests must include a valid token.
+Authentication is mandatory in HTTP and HTTPS modes. File mode needs a password hash; an empty SQL user store needs `OC_ADMIN_INITIAL_PASSWORD` or `admin_initial_password_file` for first boot. Missing configuration rejects startup; account-backend failure returns 503 rather than allowing anonymous requests. Complete the initial password change in the UI and log in again before obtaining a public API token.
 
 **Login:**
 ```bash
@@ -871,10 +871,10 @@ These editor-oriented endpoints are available only under `/rest/v1/orchestrate` 
 
 | Method | URI | Description |
 |--------|-----|-------------|
-| GET    | `/orchestrate/sandbox/verifications` | List persisted sandbox reports |
-| GET    | `/orchestrate/sandbox/verifications/{verification_id}` | Get report and events for a completed run |
-| GET    | `/orchestrate/sandbox/verifications/{verification_id}/events` | Get execution events |
-| DELETE | `/orchestrate/sandbox/verifications/{verification_id}` | Cancel an active run or delete its persisted report |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications` | List persisted sandbox reports |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}` | Get report and events for a completed run |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}/events` | Get execution events |
+| DELETE | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}` | Cancel an active run or delete its persisted report |
 
 A completed report payload contains `status`, `report`, and `events`. The `report` object includes verdict, static checks, execution path, context trace, Stub interactions, risks, suggestions, and optional error. Deletion cancels a queued/running task before removing its report and is permanent; the response returns `data.deleted = <verification_id>`.
 
@@ -882,8 +882,8 @@ A completed report payload contains `status`, `report`, and `events`. The `repor
 
 | Method | URI | Description |
 |--------|-----|-------------|
-| GET | `/orchestrate/sandbox/templates/{workflow_id}` | List saved templates |
-| PUT | `/orchestrate/sandbox/templates/{workflow_id}` | Replace saved templates; body is a JSON array |
+| GET | `/rest/v1/orchestrate/sandbox/templates/{workflow_id}` | List saved templates |
+| PUT | `/rest/v1/orchestrate/sandbox/templates/{workflow_id}` | Replace saved templates; body is a JSON array |
 
 Templates are limited to 200 entries. Extra fields and non-whitelisted response variables are rejected.
 

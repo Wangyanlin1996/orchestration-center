@@ -40,18 +40,16 @@ by the server's `max_allowed_packet` and the existing HTTP request limits.
    needs no JSON file. A missing password variable is an error; an explicitly empty
    variable allows a passwordless disposable local instance.
    Literal password fields are rejected; use password_env only.
-3. Set `persistence_mode=mysql`. Initialize the first administrator with a private
-   password before exposing the service (this also permits the authenticated HTTP
-   startup security preflight on a fresh database):
+3. Set `persistence_mode=mysql`. For an empty SQL user store, inject `OC_ADMIN_INITIAL_PASSWORD`
+   through a secret manager or set `admin_initial_password_file` to a protected file.
+   Run `python -m orchestrate.start`; startup creates admin from that secret. Existing users
+   are not reset and do not require the first-boot secret again.
+4. Change the initial password in the web UI and log in again before obtaining an API token.
+   Database credentials are independent from application accounts and TLS/mTLS.
 
-   ```bash
-   python -c "from database.utils.table_creation import create_tables; from database.utils.user_store import seed_admin_if_empty; import getpass; create_tables(); seed_admin_if_empty(getpass.getpass('Initial admin password: '))"
-   python -m orchestrate.start
-   ```
-
-   The administrator must change that password on first login. Do not treat
-   `MYSQL_PASSWORD` as an application-login password. HTTPS/mTLS and internal
-   authentication keep their existing configuration and behavior.
+Optional offline pre-provisioning remains supported: a trusted administrator may call
+`create_tables()` and `seed_admin_if_empty(getpass.getpass(...))` before exposing the service.
+This is not required for normal bootstrap. Do not bypass security preflight.
 
 ## Connection settings
 
