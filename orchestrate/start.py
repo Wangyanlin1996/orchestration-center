@@ -140,7 +140,6 @@ class CustomUvicornServer:
         """
         Start the Uvicorn server with SSL configuration.
         """
-        os.environ["FORWARDED_ALLOW_IPS"] = self.server_config.get(FORWARDED_ALLOW_IPS, "127.0.0.1")
         server_config = uvicorn.Config(
             app=app,
             host=self.server_config.get('ip', "127.0.0.1"),
@@ -154,7 +153,8 @@ class CustomUvicornServer:
             timeout_keep_alive=5,
             timeout_graceful_shutdown=2,
             log_level="info",
-            proxy_headers=True
+            proxy_headers=True,
+            forwarded_allow_ips=self.server_config.get(FORWARDED_ALLOW_IPS, "127.0.0.1"),
         )
         server = uvicorn.Server(server_config)
         record_startup_log()
@@ -206,19 +206,6 @@ def main():
         sys.exit(str(e))
     for message in preflight.warnings:
         logger.warning(message)
-    if preflight.dev_insecure_mode:
-        audit_logger.audit({
-            'object_name': OperationObject.SERVER,
-            'operation_name': OperationName.START_SERVER,
-            'level': LogLevel.DANGER,
-            'result': OperationResult.SUCCESS,
-            'details': {
-                "ip": server_config.get('ip', ""),
-                "port": server_config.get('port', ""),
-                "dev_insecure_mode": True,
-            },
-            'user_name': get_user_info_from_env().get('username'),
-        })
     storage = initialize_storage(server_config)
     atexit.register(storage.close)
     if not is_enable_https:

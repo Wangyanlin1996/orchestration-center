@@ -63,6 +63,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 COPY orchestrate/ /opt/orchestration-center/orchestrate/
 COPY samples/solution_packages/ /opt/orchestration-center/samples/solution_packages/
+COPY samples/workflow_templates/ /opt/orchestration-center/samples/workflow_templates/
 COPY host_agent/ /opt/orchestration-center/host_agent/
 COPY common/ /opt/orchestration-center/common/
 COPY database/ /opt/orchestration-center/database/

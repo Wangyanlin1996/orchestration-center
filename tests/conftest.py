@@ -24,6 +24,27 @@ from unittest.mock import MagicMock
 
 import pytest
 
+
+@pytest.fixture
+def account_session(monkeypatch):
+    """Opt-in identity for business tests, without a production auth bypass.
+
+    Keep real middleware/session validation active. Authentication contract
+    tests do not use this fixture and exercise their own account backend.
+    """
+    import hashlib
+    from types import SimpleNamespace
+    from orchestrate.server import auth
+
+    conf = {"persistence_mode": "file", "enable_https": "false",
+            "access_password": hashlib.sha256(b"SyntheticBusiness9!").hexdigest()}
+    monkeypatch.setattr(auth, "get_conf", lambda: conf)
+    monkeypatch.setattr(auth, "current_context", lambda: SimpleNamespace(has_users=False))
+    monkeypatch.setattr(auth, "_session_store", auth._SessionStore())
+    monkeypatch.setattr(auth, "_pending_password_change", set())
+    token, _ = auth.get_session_store().create("fixture-admin", "admin")
+    return {"Authorization": "Bearer " + token}
+
 # Ensure the project root is importable
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:

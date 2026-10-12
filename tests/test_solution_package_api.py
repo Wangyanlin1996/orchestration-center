@@ -19,16 +19,8 @@
 The routes read/write through SolutionPackageManager, so the tests point the
 manager at a temporary storage directory instead of the real data directory.
 
-TESTING is set before the app import so the auth middleware treats every
-request as authenticated regardless of the local server.conf (mirrors
-test_frontend_support_server.py).
+Business tests opt into a synthetic authenticated session, not an auth bypass.
 """
-import atexit
-import os
-
-_prev_testing = os.environ.get('TESTING')
-os.environ['TESTING'] = 'True'
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -36,7 +28,7 @@ from orchestrate.server import frontend_support_server
 
 
 @pytest.fixture()
-def client(tmp_path, monkeypatch):
+def client(tmp_path, monkeypatch, account_session):
     monkeypatch.setattr(
         frontend_support_server.solution_package_manager,
         "storage_dir", tmp_path / "solution_packages",
@@ -44,7 +36,7 @@ def client(tmp_path, monkeypatch):
     frontend_support_server.solution_package_manager.storage_dir.mkdir(
         parents=True, exist_ok=True
     )
-    with TestClient(frontend_support_server.app) as tc:
+    with TestClient(frontend_support_server.app, headers=account_session) as tc:
         yield tc
 
 

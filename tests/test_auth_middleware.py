@@ -131,11 +131,14 @@ class TestAuthMiddleware:
         response = await auth_middleware(request, _call_next)
         assert response.status_code == 401
 
-    async def test_bypasses_entirely_when_auth_disabled(self, monkeypatch):
+    @pytest.mark.parametrize("ip", ["127.0.0.1", "0.0.0.0"])
+    async def test_unconfigured_auth_fails_closed_even_with_removed_dev_flag(self, monkeypatch, ip):
         monkeypatch.setattr(auth_module, "is_auth_enabled", lambda: False)
+        monkeypatch.setattr(auth_module, "get_conf",
+                            lambda: {"ip": ip, "security.dev_insecure_mode": "true"})
         request = _make_request("/rest/v1/orchestrate/workflows")
         response = await auth_middleware(request, _call_next)
-        assert response.status_code == 200
+        assert response.status_code == 503
 
     @pytest.mark.parametrize("path", sorted(_PUBLIC_AUTH_PATHS))
     async def test_public_auth_paths_bypass_without_a_token(self, monkeypatch, path):

@@ -15,14 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Coverage for the fail-closed startup check (docs/design/security-design.md 6.3).
-
-The unsafe cell is ``enable_https=false`` + no credential + a non-loopback bind: no
-mTLS, no application-layer guard on ``/api/v1/*``, and the port reachable from off
-this host. The image defaults (Dockerfile: ``ORCH_IP=0.0.0.0``,
-``ORCH_ENABLE_HTTPS=false``, empty ``access_password``) land in exactly that cell, so
-these tests pin the refusal and the two documented ways out of it.
-"""
+"""Account startup is fail-closed on HTTP/HTTPS and all bind addresses."""
 
 import os
 from unittest.mock import Mock, patch
@@ -33,8 +26,6 @@ from orchestrate.server.security_preflight import (
     ADMIN_INITIAL_PASSWORD_ENV,
     SecurityPreflightError,
     credential_configured,
-    dev_insecure_mode_enabled,
-    is_loopback_bind,
     security_preflight,
 )
 
@@ -43,7 +34,7 @@ from orchestrate.server.security_preflight import (
 def _no_ambient_bootstrap_credential(monkeypatch):
     """The check reads the process environment; keep the ambient one out of it."""
     monkeypatch.delenv(ADMIN_INITIAL_PASSWORD_ENV, raising=False)
-    # HTTP needs an independent machine credential, not just the UI password.
+    # Explicit legacy bearer tests must not depend on a real credential.
     monkeypatch.setenv("ORCH_API_TOKEN", "test-only-machine-token-at-least-32-bytes")
 
 
@@ -53,21 +44,9 @@ def _conf(**overrides):
         "ip": "127.0.0.1",
         "persistence_mode": "file",
         "access_password": "",
-        "security.dev_insecure_mode": "false",
     }
     conf.update(overrides)
     return conf
-
-
-class TestIsLoopbackBind:
-    @pytest.mark.parametrize("address", ["127.0.0.1", "127.0.0.10", "localhost", "LOCALHOST", "::1"])
-    def test_loopback(self, address):
-        assert is_loopback_bind(address) is True
-
-    @pytest.mark.parametrize("address", ["0.0.0.0", "::", "192.168.1.10", "example.com", "", "  "])
-    def test_exposed(self, address):
-        """A wildcard bind is the case the check exists for, not a loopback one."""
-        assert is_loopback_bind(address) is False
 
 
 class TestCredentialConfigured:
@@ -104,16 +83,20 @@ class TestCredentialConfigured:
 
 
 class TestPreflightMatrix:
-    """One case per row of the section 6.3 table, plus the rows' neighbours."""
+    """TLS and bind address never substitute for account authentication."""
 
-    def test_https_enabled_starts_anywhere(self):
-        result = security_preflight(_conf(enable_https="true", ip="0.0.0.0"))
+    def test_explicit_mtls_starts_anywhere(self):
+        result = security_preflight(_conf(enable_https="true", ip="0.0.0.0", **{"external.auth.mode": "mtls"}))
         assert result.https_enabled is True
         assert result.warnings == ()
 
-    def test_https_enabled_without_credential_still_starts(self):
-        result = security_preflight(_conf(enable_https="true", ip="0.0.0.0"))
+    def test_explicit_mtls_without_user_credential_still_starts(self):
+        result = security_preflight(_conf(enable_https="true", ip="0.0.0.0", **{"external.auth.mode": "mtls"}))
         assert result.credential_configured is False
+
+    def test_default_https_requires_account_credential(self):
+        with pytest.raises(SecurityPreflightError):
+            security_preflight(_conf(enable_https="true", ip="0.0.0.0"))
 
     def test_plaintext_with_credential_starts_with_a_warning(self):
         result = security_preflight(_conf(access_password="deadbeef", ip="0.0.0.0"))
@@ -121,28 +104,24 @@ class TestPreflightMatrix:
         assert len(result.warnings) == 1
         assert "plaintext" in result.warnings[0]
 
-    def test_credentialless_loopback_requires_the_dev_flag(self):
+    def test_credentialless_loopback_is_refused(self):
         with pytest.raises(SecurityPreflightError):
             security_preflight(_conf(ip="127.0.0.1"))
 
-    def test_dev_flag_permits_the_credentialless_loopback_bind(self):
-        result = security_preflight(_conf(ip="127.0.0.1", **{"security.dev_insecure_mode": "true"}))
-        assert result.dev_insecure_mode is True
-        assert len(result.warnings) == 1
-        assert "dev_insecure_mode" in result.warnings[0]
+    @pytest.mark.parametrize("ip", ["127.0.0.1", "::1", "0.0.0.0"])
+    def test_removed_dev_flag_never_permits_credentialless_startup(self, ip):
+        with pytest.raises(SecurityPreflightError):
+            security_preflight(_conf(ip=ip, **{"security.dev_insecure_mode": "true"}))
 
-    def test_dev_flag_does_not_permit_a_non_loopback_bind(self):
-        with pytest.raises(SecurityPreflightError) as exc:
-            security_preflight(_conf(ip="0.0.0.0", **{"security.dev_insecure_mode": "true"}))
-        assert "does not lift this" in str(exc.value)
-
-    def test_unsafe_cell_refuses_and_names_both_ways_out(self):
+    def test_missing_account_names_its_actual_configuration(self):
         with pytest.raises(SecurityPreflightError) as exc:
             security_preflight(_conf(ip="0.0.0.0"))
         message = str(exc.value)
         assert "Refusing to start" in message
         assert "access_password" in message
-        assert "ip=127.0.0.1" in message
+        assert "ORCH_ACCESS_PASSWORD" in message
+        assert "dev_insecure_mode" not in message
+        assert "OC_ADMIN_INITIAL_PASSWORD" not in message
 
     @pytest.mark.parametrize("ip", ["0.0.0.0", "::", "", "192.168.1.10", "orchestration-center"])
     def test_every_non_loopback_bind_refuses_without_a_credential(self, ip):
@@ -155,17 +134,21 @@ class TestPreflightMatrix:
         assert result.credential_configured is True
 
 
-class TestDevInsecureModeFlag:
-    def test_default_is_off(self):
-        assert dev_insecure_mode_enabled({}) is False
+class TestPreciseRefusal:
+    def test_missing_legacy_bearer_does_not_blame_configured_account(self, monkeypatch):
+        monkeypatch.delenv("ORCH_API_TOKEN", raising=False)
+        with pytest.raises(SecurityPreflightError) as exc:
+            security_preflight(_conf(access_password="hash", **{"external.auth.mode": "bearer"}))
+        assert "external.auth.mode=bearer" in str(exc.value)
+        assert "static-token" in str(exc.value)
+        assert "access_password" not in str(exc.value)
 
-    @pytest.mark.parametrize("value", ["true", "True", " true "])
-    def test_truthy_spellings(self, value):
-        assert dev_insecure_mode_enabled({"security.dev_insecure_mode": value}) is True
-
-    @pytest.mark.parametrize("value", ["false", "0", "yes", ""])
-    def test_everything_else_is_off(self, value):
-        assert dev_insecure_mode_enabled({"security.dev_insecure_mode": value}) is False
+    def test_database_message_distinguishes_bootstrap_from_file_password(self):
+        with patch("database.utils.user_store.has_any_user", return_value=False):
+            with pytest.raises(SecurityPreflightError) as exc:
+                security_preflight(_conf(persistence_mode="mysql"))
+        assert "database connectivity" in str(exc.value)
+        assert "OC_ADMIN_INITIAL_PASSWORD" in str(exc.value)
 
 
 class TestShippedServerConf:
@@ -187,9 +170,11 @@ class TestShippedServerConf:
                 conf[key.strip()] = value.strip()
         return conf
 
-    def test_dev_insecure_mode_ships_off(self):
+    def test_redundant_authentication_settings_are_not_shipped(self):
         conf = self._parse(self._PATH)
-        assert conf.get("security.dev_insecure_mode", "").lower() == "false"
+        assert "security.dev_insecure_mode" not in conf
+        assert "external.auth.mode" not in conf
+        assert "external.auth.token_env" not in conf
 
     def test_shipped_conf_is_refused_on_a_non_loopback_bind(self):
         """The shipped file configures no credential, so exposing it must fail."""
@@ -197,8 +182,7 @@ class TestShippedServerConf:
         with pytest.raises(SecurityPreflightError):
             security_preflight(conf)
 
-    def test_shipped_conf_needs_the_dev_flag_on_its_own_loopback_default(self):
-        """Even ip=127.0.0.1 as shipped starts only once the operator opts in."""
+    def test_shipped_loopback_requires_an_account(self):
         conf = {**self._parse(self._PATH), "persistence_mode": "file"}
         with pytest.raises(SecurityPreflightError):
             security_preflight(conf)
@@ -219,10 +203,10 @@ class TestMainUsesThePreflight:
         assert "Refusing to start" in str(exc.value)
         run.assert_not_called()
 
-    def test_main_starts_with_the_dev_flag_on_loopback(self, monkeypatch):
+    def test_main_starts_with_an_account_on_loopback(self, monkeypatch):
         from orchestrate import start
 
-        conf = _conf(ip="127.0.0.1", **{"security.dev_insecure_mode": "true"})
+        conf = _conf(ip="127.0.0.1", access_password="synthetic-hash")
         monkeypatch.setattr(start, "get_conf", lambda: conf)
         run = Mock()
         audit = Mock()
@@ -232,12 +216,11 @@ class TestMainUsesThePreflight:
         start.main()
 
         run.assert_called_once()
-        audit.assert_called_once()
-        assert audit.call_args.args[0]["details"]["dev_insecure_mode"] is True
+        audit.assert_not_called()
 
 
 class TestHealthEndpoint:
-    def test_health_is_public_and_echoes_the_dev_flag(self, monkeypatch):
+    def test_health_is_public_and_does_not_expose_configuration(self, monkeypatch):
         from fastapi.testclient import TestClient
 
         from orchestrate.server import frontend_support_server as server
@@ -248,13 +231,13 @@ class TestHealthEndpoint:
         client = TestClient(server.app)
         response = client.get("/health")
         assert response.status_code == 200
-        assert response.json() == {"status": "ok", "dev_insecure_mode": True}
+        assert response.json() == {"status": "ok"}
 
-    def test_health_reports_the_flag_off_by_default(self, monkeypatch):
+    def test_health_has_only_minimal_liveness(self, monkeypatch):
         from fastapi.testclient import TestClient
 
         from orchestrate.server import frontend_support_server as server
 
         monkeypatch.setattr(server, "get_conf", lambda: {})
         client = TestClient(server.app)
-        assert client.get("/health").json() == {"status": "ok", "dev_insecure_mode": False}
+        assert client.get("/health").json() == {"status": "ok"}

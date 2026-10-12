@@ -147,17 +147,16 @@ def test_bad_document_is_corruption_not_missing():
     "/rest/v1/orchestrate/execution-records", "/api/v1/orchestrate/psop/absent",
     "/api/v1/executions", "/api/v1/executions/absent",
 ])
-def test_routes_return_503_on_outage(path, monkeypatch, sql_mode):
+def test_routes_return_503_on_outage(path, monkeypatch, sql_mode, account_session):
     from orchestrate.core.shared_handlers import SharedHandlers
     from orchestrate.server import frontend_support_server as server, auth
     from orchestrate.persistence import context
 
     monkeypatch.setattr(context, "_persistence_context", StorageContext(create_backend("mysql")))
     monkeypatch.setattr(SharedHandlers, "_retrieval", None)
-    monkeypatch.setattr(auth, "is_auth_enabled", lambda: False)
     with patch.object(psop_processor, "create_connection", return_value=None), \
          patch.object(execution_record_processor, "create_connection", return_value=None):
-        response = TestClient(server.app).get(path)
+        response = TestClient(server.app, headers=account_session).get(path)
     assert response.status_code == 503, response.text
     assert "password=" not in response.text
 

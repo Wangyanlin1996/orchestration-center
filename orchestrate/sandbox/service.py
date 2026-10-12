@@ -75,11 +75,15 @@ class SandboxService:
                 async with self._semaphore:
                     self._status[verification_id] = "running"
                     conf = get_conf()
-                    scheme = "https" if conf.get("enable_https", "false").lower() == "true" else "http"
+                    # Defaults must mirror the server's own (enable_https and
+                    # client_verify_server default to on), or a deployment that
+                    # omits both keys would point the sandbox at http:// while
+                    # the orchestration center only answers on https://.
+                    scheme = "https" if conf.get("enable_https", "true").lower() == "true" else "http"
                     orch_port = conf.get("port", "5001")
                     control_point = self.control_point_factory(
                         orch_url=f"{scheme}://127.0.0.1:{orch_port}",
-                        ssl_verify=str(conf.get("client_verify_server", "false")).lower() == "true",
+                        ssl_verify=str(conf.get("client_verify_server", "true")).lower() == "true",
                         lang=lang,
                     )
                     async with asyncio.timeout(self._run_timeout_seconds):

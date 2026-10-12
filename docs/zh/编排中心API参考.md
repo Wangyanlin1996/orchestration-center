@@ -63,7 +63,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ### 认证
 
-内部 API（`/rest/v1/orchestrate/*`）支持可选的令牌认证，提供两种模式：
+内部和公开 API 默认共用账号认证，提供两种账号来源：
 
 - **数据库模式（PostgreSQL/MySQL）**：用户存储在数据库中，使用版本化密码哈希。支持用户管理；自助注册默认关闭，可通过 `auth.register.enabled=true` 显式开启。
 - **文件模式**：通过 `server.conf` 的 `access_password` 配置单一密码，用户名固定为 `admin`。
@@ -95,7 +95,28 @@ curl -X POST https://127.0.0.1:5001/rest/v1/orchestrate/auth/register \\
   -d '{"username":"newuser","password":"<明文密码>"}'
 ```
 
-外部 API（`/api/v1/*`）在 `enable_https=true` 且 `verify_client=true` 时受 mTLS 保护。
+**程序登录（与网页相同账号，默认 `external.auth.mode=auto/user`）：**
+
+```bash
+curl -X POST https://127.0.0.1:5001/api/v1/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"<明文密码>"}'
+```
+
+成功响应不设置 Cookie，并带 `Cache-Control: no-store`：
+
+```json
+{"access_token":"<令牌>","token_type":"Bearer","expires_in":43200}
+```
+
+访问公开 `/api/v1/*` 时传 `Authorization: Bearer <令牌>`，Cookie 单独携带和 URL Token 均不授权。
+`POST /api/v1/auth/logout` 携带该请求头撤销该 Token。改密、删除账号撤销全部会话；Token 按 TTL
+过期，服务重启后需重新登录。强制初次改密的账号须先通过网页登录完成改密；两种登录共用每 IP 限流。
+这是自有账号登录，不是 OAuth2 授权服务器。通过网页代理访问时路径前加 `/api/orchestrate`，保留原用户
+Bearer；代理客户端证书不代表原用户。
+
+HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS 客户端证书，调用方 `verify=False`
+不会关闭鉴权。显式 `bearer`/`mtls`/`custom` 旧直连接入见[传输配置](../transport-runtime.md)。
 
 ## 1. SOP 编排接口
 

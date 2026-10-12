@@ -25,7 +25,8 @@ BACKEND = """
 import http.server, json, os, ssl
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        body = json.dumps({'path': self.path, 'authorization': self.headers.get('Authorization')}).encode()
+        body = json.dumps({'path': self.path, 'authorization': self.headers.get('Authorization'),
+                           'browser_gateway': self.headers.get('X-OpenAN-Browser-Gateway')}).encode()
         self.send_response(200)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
@@ -76,7 +77,7 @@ def run():
                     try:
                         with opener.open(request, timeout=3) as response:
                             result = json.load(response)
-                        assert result == {"path": "/probe", "authorization": "Bearer synthetic-proxy-token"}
+                        assert result == {"path": "/probe", "authorization": "Bearer synthetic-proxy-token", "browser_gateway": "1"}
                         break
                     except URLError:
                         if time.monotonic() >= deadline:
@@ -86,6 +87,16 @@ def run():
                 assert f"proxy_pass {'https' if secure else 'http'}://orchestration-center:5001/" in config
                 if secure:
                     assert "proxy_ssl_verify on;" in config
+                # Public APIs reach backend account authentication unchanged.
+                # Exercise nginx URI normalization and marker/header forwarding.
+                for path in ("api/v1/executions", "api%2Fv1/executions", "other/../api/v1/executions"):
+                    request = Request(f"http://{address}/api/orchestrate/{path}",
+                                      headers={"Authorization": "Bearer synthetic-account-token",
+                                               "X-OpenAN-Browser-Gateway": ""})
+                    with opener.open(request, timeout=3) as response:
+                        result = json.load(response)
+                    assert result == {"path": "/api/v1/executions",
+                                      "authorization": "Bearer synthetic-account-token", "browser_gateway": "1"}
                 command("docker", "rm", "-f", frontend, backend)
                 containers.remove(frontend)
                 containers.remove(backend)

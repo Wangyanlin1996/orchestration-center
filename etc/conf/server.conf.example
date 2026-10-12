@@ -13,6 +13,8 @@ ssl_keyfile=etc/ssl/server_key.pem
 ssl_keyfile_password=etc/ssl/cert_pwd
 ssl_ca_certs=etc/ssl/trust.cer
 verify_client=true
+# Optional client-certificate revocation list; absent/empty disables checking.
+ssl_crl_file=
 # Outbound server verification is independent of inbound client authentication.
 client_verify_server=true
 
@@ -21,12 +23,10 @@ client_verify_server=true
 # config/ORCH_ACCESS_PASSWORD, never bake into an image.
 access_password=
 access_token_ttl=43200
-security.dev_insecure_mode=false
 
-# auto preserves existing verified mTLS deployments; other transports require
-# machine Bearer authentication. custom uses AUTHENTICATE_EXTERNAL extension.
-external.auth.mode=auto
-external.auth.token_env=ORCH_API_TOKEN
+# Account login Bearer is the default, independent of HTTPS/client verification.
+# Explicit bearer retains ORCH_API_TOKEN compatibility; mtls/custom are opt-in.
+# No auth mode/token-env setting is needed for normal account login.
 # Optional browser-facing scheme, independent of backend TLS. Empty uses the
 # request scheme as resolved by Uvicorn's restricted trusted-proxy middleware.
 public_scheme=

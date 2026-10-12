@@ -291,6 +291,34 @@ async def test_service_uses_polling_id_for_report(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_control_point_transport_defaults_follow_server_defaults(monkeypatch, tmp_path):
+    # 键缺省时,沙箱推导的传输参数必须与主服务的默认一致(https + 服务端校验),
+    # 否则省略配置的部署会出现沙箱走 http、主服务在 https 的静默失配
+    captured = {}
+
+    async def fake_run_sandbox(psop, agent_cards, control_point, *, verification_id, **kwargs):
+        return SandboxRunReport(
+            verification_id=verification_id,
+            workflow_id=psop.id,
+            workflow_name=psop.name,
+            scenario=StubScenario.SUCCESS,
+            verdict=SandboxCheckStatus.PASS,
+        )
+
+    monkeypatch.setattr("orchestrate.sandbox.service.run_sandbox", fake_run_sandbox)
+    monkeypatch.setattr("orchestrate.sandbox.service.get_conf", lambda: {})
+    service = SandboxService(
+        control_point_factory=lambda **kwargs: captured.update(kwargs) or None,
+        store=SandboxStore(tmp_path),
+    )
+    verification_id = await service.start(_psop(), [])
+    await service.wait(verification_id)
+
+    assert captured["orch_url"] == "https://127.0.0.1:5001"
+    assert captured["ssl_verify"] is True
+
+
+@pytest.mark.asyncio
 async def test_service_limits_concurrent_runs(monkeypatch, tmp_path):
     first_started = asyncio.Event()
     release_first = asyncio.Event()

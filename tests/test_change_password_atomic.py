@@ -15,13 +15,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import os
 import threading
 from unittest.mock import patch
 
 import pytest
-
-os.environ.setdefault("TESTING", "True")
 
 from orchestrate.server.frontend_support_server import _update_access_password_in_conf
 

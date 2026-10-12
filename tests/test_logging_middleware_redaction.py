@@ -22,10 +22,6 @@ live, still-valid bearer token into the application log on every workflow
 execution.
 """
 
-import os
-
-os.environ.setdefault("TESTING", "True")
-
 from orchestrate.server.frontend_support_server import _redact_sensitive_params
 
 

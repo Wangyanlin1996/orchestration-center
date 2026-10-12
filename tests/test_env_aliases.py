@@ -1,0 +1,55 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+"""Deployment aliases must cover every security-relevant configuration key.
+
+Container and chart deployments inject configuration as environment
+variables, not files: a key without an alias is one that those deployments
+silently cannot set. This pins the security-related half of the alias table
+so a new key cannot regress into env-uninjectable again.
+"""
+
+from common.util.config_util import apply_env_overrides
+
+
+def test_security_keys_have_env_aliases(monkeypatch):
+    monkeypatch.setenv("ORCH_SSL_CRL_FILE", "etc/ssl/revocationlist.crl")
+    monkeypatch.setenv("ORCH_ACCESS_TOKEN_TTL", "3600")
+    monkeypatch.setenv("ORCH_EXTERNAL_AUTH_TOKEN_ENV", "MY_API_TOKEN_ENV")
+    monkeypatch.setenv("REGISTRY_CLIENT_KEY_PASSWORD_ENV", "MY_KEY_PASSWORD_ENV")
+    config = {}
+    apply_env_overrides(config)
+    assert config["ssl_crl_file"] == "etc/ssl/revocationlist.crl"
+    assert config["access_token_ttl"] == "3600"
+    assert config["external.auth.token_env"] == "MY_API_TOKEN_ENV"
+    assert config["agent_registry.client_key_password_env"] == "MY_KEY_PASSWORD_ENV"
+
+
+def test_existing_transport_aliases_still_resolve(monkeypatch):
+    monkeypatch.setenv("ORCH_ENABLE_HTTPS", "true")
+    monkeypatch.setenv("ORCH_CLIENT_VERIFY_SERVER", "true")
+    config = {}
+    apply_env_overrides(config)
+    assert config["enable_https"] == "true"
+    assert config["client_verify_server"] == "true"
+
+
+def test_removed_dev_alias_cannot_add_an_authentication_switch(monkeypatch):
+    monkeypatch.setenv("ORCH_DEV_INSECURE_MODE", "true")
+    config = {}
+    apply_env_overrides(config)
+    assert "security.dev_insecure_mode" not in config

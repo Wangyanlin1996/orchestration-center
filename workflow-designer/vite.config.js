@@ -41,6 +41,7 @@ export default ({ mode }) => defineConfig({
                 target: proxyTarget,
                 changeOrigin: true,
                 secure: false,
+                headers: { 'X-OpenAN-Browser-Gateway': '1' },
                 rewrite: (path) => path.replace(/^\/api\/orchestrate/, ''),
             };
 

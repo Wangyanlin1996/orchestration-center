@@ -16,8 +16,6 @@
 #    under the License.
 
 import os
-import hashlib
-import secrets
 import tempfile
 import threading
 import json
@@ -54,7 +52,6 @@ from common.custom.interface_type import InterfaceType
 import orchestrate.handlers  # noqa: F401  - registers the bundled storage handlers
 from orchestrate.server.sse_executor import dispatch_intent_sse
 from orchestrate.server.response_utils import ok, created, error, get_agent_cards
-from orchestrate.server.security_preflight import dev_insecure_mode_enabled
 from orchestrate.registry_client.client_factory import AgentRegistryClientFactory
 from orchestrate.agentcard_loader import _normalize_agent_dict
 from common.log.audit_logger import audit_logger, OperationObject, OperationName, LogLevel, OperationResult
@@ -62,11 +59,13 @@ from common.util.config_util import get_conf
 from orchestrate.persistence import current_context
 from orchestrate.persistence.errors import StorageError
 from orchestrate.server.storage_error_response import storage_http_exception
-from common.util.password_hash import FILE_HASH_PREFIX, hash_password, verify_legacy_bcrypt, verify_password
+from common.util.password_hash import FILE_HASH_PREFIX, hash_password
 from orchestrate.core.model.preflow import PreFlow
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.persistence import WorkflowStorageError
 from orchestrate.server.external_api import router as external_router
+from orchestrate.server.account_api import router as account_router
+from orchestrate.server.account_auth import AccountLogin, authenticate_account, verify_access_password
 from orchestrate.server.sandbox_api import sandbox_router, sandbox_service
 from orchestrate.core.psop_generator import PsopGenerator, WorkflowGeneratorError
 from orchestrate.core.intent_psop_generator import IntentPsopGenerator
@@ -255,9 +254,7 @@ router = APIRouter(prefix="/rest/v1/orchestrate")
 
 # ---- Access authentication ----
 
-class LoginRequest(BaseModel):
-    username: str = Field(..., min_length=1, max_length=64, description="Username")
-    password: str = Field(..., min_length=1, max_length=256, description="Password (plaintext, sent over TLS)")
+LoginRequest = AccountLogin
 
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64, description="Username")
@@ -280,38 +277,27 @@ async def login(request: LoginRequest, response: Response, http_request: Request
         return ok(data={"auth_required": False}, message="Authentication disabled")
     conf = get_conf()
     storage = current_context()
+    store = get_session_store()
+    revision = store.login_revision()
+    try:
+        user = await anyio.to_thread.run_sync(lambda: authenticate_account(
+            request.username, request.password, conf=conf, storage=storage))
+    except StorageError as exc:
+        raise storage_http_exception(exc) from exc
+    role = user.get("role", "user")
+    must_change = user.get("must_change_password", False)
+    token, ttl = store.create(user["username"], role, login_revision=revision)
+    if must_change:
+        mark_must_change_password(user["username"])
+    else:
+        clear_must_change_password(user["username"])
+    set_session_cookie(response, token, ttl, http_request)
+    response.headers["Cache-Control"] = "no-store"
+    logger.info(f"Login successful: {user['username']}")
+    data = {"auth_required": True, "expires_in": ttl, "username": user["username"], "role": role}
     if storage.has_users:
-        # Credentials live in the configured backend's user store, which is
-        # also what declares the USERS capability - no mode needed here.
-        user = storage.users.authenticate(request.username, request.password)
-        if user is not None:
-            role = user.get("role", "user")
-            must_change = user.get("must_change_password", False)
-            if must_change:
-                mark_must_change_password(user["username"])
-            else:
-                clear_must_change_password(user["username"])
-            token, ttl = get_session_store().create(user["username"], role)
-            set_session_cookie(response, token, ttl, http_request)
-            logger.info(f"Login successful (DB): {user['username']}")
-            return ok(data={
-                "auth_required": True, "expires_in": ttl,
-                "username": user["username"], "role": role,
-                "must_change_password": must_change,
-            })
-        logger.warning(f"Login failed: username={request.username}")
-        raise HTTPException(status_code=401, detail="Incorrect username or password")
-    # File mode: config-based auth. access_password stores sha256(plaintext)
-    # (see generate_access_password.py); hash the incoming plaintext the
-    # same way before comparing.
-    stored = conf.get("access_password", "")
-    if request.username == "admin" and _verify_access_password(stored, request.password):
-        token, ttl = get_session_store().create("admin", "admin")
-        set_session_cookie(response, token, ttl, http_request)
-        logger.info("Login successful (config): admin")
-        return ok(data={"auth_required": True, "expires_in": ttl, "username": "admin", "role": "admin"})
-    logger.warning(f"Login failed: username={request.username}")
-    raise HTTPException(status_code=401, detail="Incorrect username or password")
+        data["must_change_password"] = must_change
+    return ok(data=data)
 
 @router.post("/auth/register")
 async def register(request: RegisterRequest):
@@ -371,6 +357,7 @@ async def delete_user_endpoint(username: str, _: Any = Depends(require_admin)):
         raise HTTPException(status_code=403, detail="Cannot delete admin user")
     from database.utils.user_store import delete_user
     if delete_user(username):
+        get_session_store().revoke_user(username)
         logger.info(f"User deleted: {username}")
         return ok(message=f"User '{username}' deleted")
     raise HTTPException(status_code=404, detail="User not found")
@@ -392,13 +379,7 @@ def _verify_access_password(stored: str, plaintext: str) -> bool:
     Supports versioned bcrypt hashes, older direct-bcrypt hashes, and the
     legacy sha256(plaintext) values generated by generate_access_password.py.
     """
-    if not stored:
-        return False
-    if stored.startswith(FILE_HASH_PREFIX):
-        return verify_password(plaintext, stored[len(FILE_HASH_PREFIX):])
-    if stored.startswith("$2"):
-        return verify_legacy_bcrypt(plaintext, stored)
-    return secrets.compare_digest(hashlib.sha256(plaintext.encode()).hexdigest(), stored)
+    return verify_access_password(stored, plaintext)
 
 
 def _hash_access_password(plaintext: str) -> str:
@@ -452,6 +433,7 @@ async def change_password(request: ChangePasswordRequest, http_request: Request)
             raise HTTPException(status_code=401, detail="Current password is incorrect")
         if storage.users.update_password(username, request.new_password):
             clear_must_change_password(username)
+            get_session_store().revoke_user(username)
             logger.info(f"Password changed for user '{username}'")
             return ok(message="Password changed successfully")
         raise HTTPException(status_code=500, detail="Failed to change password")
@@ -467,6 +449,7 @@ async def change_password(request: ChangePasswordRequest, http_request: Request)
         logger.error(f"Cannot change password: {conf_path} does not exist")
         raise HTTPException(status_code=500, detail="server.conf not found")
     if _update_access_password_in_conf(conf_path, new_hash):
+        get_session_store().revoke_user(username)
         logger.info("Password changed (file mode): access_password updated in server.conf")
         return ok(message="Password changed successfully")
     logger.error(f"Cannot change password: no access_password key in {conf_path}")
@@ -1098,7 +1081,8 @@ async def delete_agent_card(
 # Workflow templates
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_templates_dir = pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "workflow_templates"
+# Bundled, read-only resources must not be hidden by the runtime data volume.
+_templates_dir = pathlib.Path(__file__).resolve().parent.parent.parent / "samples" / "workflow_templates"
 
 @router.get("/templates")
 async def list_templates(
@@ -1302,6 +1286,7 @@ async def get_execution_record(execution_id: str):
 # ──── Register routers ────
 app.include_router(router)
 app.include_router(external_router)
+app.include_router(account_router)
 app.include_router(sandbox_router, prefix="/rest/v1/orchestrate")
 
 
@@ -1312,15 +1297,8 @@ app.include_router(sandbox_router, prefix="/rest/v1/orchestrate")
 
 @app.get("/health")
 async def health():
-    """Public liveness probe, and the operator-visible startup-check flag.
-
-    Deliberately unauthenticated (auth_middleware covers /rest/v1/orchestrate and
-    /psops only) and deliberately tiny: it echoes whether
-    security.dev_insecure_mode=true is in effect, so an instance intentionally
-    started without a credential is visible from outside rather than only in its
-    own log. No version, configuration or build metadata is exposed.
-    """
-    return {"status": "ok", "dev_insecure_mode": dev_insecure_mode_enabled(get_conf())}
+    """Public, minimal liveness probe; exposes no configuration or identity."""
+    return {"status": "ok"}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Legacy route aliases (backward compatibility, delegates to new routes)

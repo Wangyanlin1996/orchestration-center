@@ -42,14 +42,9 @@ def _database_context(mode="postgresql"):
 
 
 @pytest.fixture
-def client(_testing_mode):
+def client(account_session):
     with TestClient(app) as c:
         yield c
-
-
-@pytest.fixture(autouse=True)
-def _testing_mode(monkeypatch):
-    monkeypatch.setenv("TESTING", "True")
 
 
 @pytest.fixture(autouse=True)
@@ -81,8 +76,8 @@ def test_execution_record_accepts_normal_id(tmp_path):
     assert storage.delete_execution_record("abc-123") is False
 
 
-def test_execution_record_delete_endpoint_rejects_bad_id(client):
-    resp = client.delete("/rest/v1/orchestrate/execution-records/..%5C..%5Cevil")
+def test_execution_record_delete_endpoint_rejects_bad_id(client, account_session):
+    resp = client.delete("/rest/v1/orchestrate/execution-records/..%5C..%5Cevil", headers=account_session)
     assert resp.status_code == 400
 
 
@@ -107,12 +102,13 @@ def test_psops_allows_valid_session_when_auth_enabled(client):
         assert resp.status_code == 200
 
 
-def test_psops_open_when_auth_disabled(client):
-    # TESTING=True 时 is_auth_enabled 为 False,与既有行为一致
+def test_psops_closed_when_account_unconfigured(client, monkeypatch):
+    monkeypatch.setattr("orchestrate.server.auth.get_conf", lambda: {})
     with patch("orchestrate.core.shared_handlers.SharedHandlers.retrieval") as retrieval:
         retrieval.return_value.list_recent_workflows.return_value = []
         resp = client.get("/psops")
-        assert resp.status_code == 200
+        assert resp.status_code == 503
+        retrieval.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +166,7 @@ def test_middleware_returns_503_when_user_store_unreachable(client, monkeypatch)
     monkeypatch.setattr(user_store, "_any_user_exists_cache", False)
     monkeypatch.setattr(user_store, "create_connection", lambda: None)
 
-    # 绕过 TESTING 短路,直接模拟 DB 不可达(has_any_user 抛 RuntimeError)
+    # 模拟账号库不可达，确认认证层失败关闭。
     import orchestrate.server.auth as auth
 
     def _raise_down():
@@ -220,8 +216,7 @@ def test_file_mode_access_password_bcrypt_and_legacy(client, monkeypatch):
     assert _verify_access_password(versioned_hash, long_password)
     assert not _verify_access_password(versioned_hash, "密" * 39 + "别")
 
-    # file-mode 登录:TESTING 短路会跳过口令校验,需 patch 端点侧的
-    # is_auth_enabled=True 才能走到口令比对分支
+    # 文件模式登录与业务会话使用同一认证状态，端点实际校验口令。
     monkeypatch.setattr("orchestrate.server.frontend_support_server.is_auth_enabled", lambda: True)
     monkeypatch.setattr(
         "orchestrate.server.frontend_support_server.get_conf",

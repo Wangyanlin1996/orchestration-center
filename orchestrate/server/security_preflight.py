@@ -15,22 +15,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Fail-closed startup policy for independent user and machine authentication.
+"""Fail-closed startup policy for account authentication and explicit legacy modes.
 
 HTTP and HTTPS without client verification use application credentials.
-Verified mTLS remains available; only explicit loopback demos bypass checks.
+Verified mTLS remains available. Bind addresses never waive authentication.
 """
 
-import ipaddress
 import os
 from dataclasses import dataclass
 from typing import Tuple
 
 from loguru import logger
 from orchestrate.server.external_auth import external_auth_configured, external_auth_mode
-
-# Config key allowing a credential-less bind. Lowercased by get_conf().
-DEV_INSECURE_MODE_KEY = "security.dev_insecure_mode"
 
 # First-boot credential sources named by section 5.3 of the design document.
 ADMIN_INITIAL_PASSWORD_FILE_KEY = "admin_initial_password_file"
@@ -41,13 +37,6 @@ PLAINTEXT_WARNING = (
     "over plaintext. A credential is configured, so access is authenticated, but the "
     "password and the session token are readable on the wire."
 )
-
-DEV_INSECURE_WARNING = (
-    "security.dev_insecure_mode=true: starting with no authentication configured on a "
-    "loopback bind. Authentication is DISABLED for every route. This is for local "
-    "demos only -- set access_password to run this instance normally."
-)
-
 
 class SecurityPreflightError(RuntimeError):
     """Raised when the deployment would start with no authentication at all."""
@@ -84,25 +73,7 @@ class PreflightResult:
 
     https_enabled: bool
     credential_configured: bool
-    loopback_bind: bool
-    dev_insecure_mode: bool
     warnings: Tuple[str, ...] = ()
-
-
-def is_loopback_bind(bind_address: str) -> bool:
-    """Whether ``bind_address`` can receive traffic from outside this host.
-
-    ``0.0.0.0`` and ``::`` are *not* loopback: binding them is the case this check
-    exists for. Hostnames are not resolved -- a startup check must not depend on DNS,
-    so anything that is not literally a loopback address counts as exposed.
-    """
-    candidate = (bind_address or "").strip()
-    if candidate.lower() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(candidate).is_loopback
-    except ValueError:
-        return False
 
 
 def credential_configured(conf: dict) -> bool:
@@ -146,63 +117,46 @@ def _user_store_populated(conf: dict) -> bool:
         return False
 
 
-def dev_insecure_mode_enabled(conf: dict) -> bool:
-    """Whether the credential-less loopback exception is opted into."""
-    return str(conf.get(DEV_INSECURE_MODE_KEY, "false")).strip().lower() == "true"
-
-
 def security_preflight(conf: dict) -> PreflightResult:
-    """Evaluate the deployment against the section 6.3 matrix.
+    """Require usable authentication before opening the listener.
 
     Raises:
         SecurityPreflightError: the server must not bind in this configuration.
     """
     https_enabled = str(conf.get("enable_https", True)).strip().lower() == "true"
-    bind_address = str(conf.get("ip", "127.0.0.1"))
-    loopback = is_loopback_bind(bind_address)
     credential = credential_configured(conf)
-    dev_mode = dev_insecure_mode_enabled(conf)
 
     scheme = str(conf.get("public_scheme", "")).strip().lower()
     if scheme not in {"", "http", "https"}:
         raise SecurityPreflightError("public_scheme must be http or https")
     try:
-        external_ready = external_auth_configured(conf)
-        mtls = external_auth_mode(conf) == "mtls" and external_ready
+        mode = external_auth_mode(conf)
+        external_ready = credential if mode == "user" else external_auth_configured(conf)
+        mtls = mode == "mtls" and external_ready
     except ValueError as exc:
         raise SecurityPreflightError(str(exc)) from exc
 
     if external_ready and (credential or mtls):
         warnings = () if https_enabled else (PLAINTEXT_WARNING,)
-        return PreflightResult(https_enabled, credential, loopback, dev_mode, warnings)
-
-    if dev_mode and loopback:
-        # Row 4: the one cell the dev flag unlocks.
-        return PreflightResult(https_enabled, credential, True, True, (DEV_INSECURE_WARNING,))
-
-    # Row 5, and the dev flag is not an exception to it: off-loopback, the exposure
-    # is real regardless of who set the flag.
-    raise SecurityPreflightError(_refusal_message(bind_address, dev_mode))
+        return PreflightResult(https_enabled, credential, warnings)
+    raise SecurityPreflightError(_refusal_message(conf, mode, external_ready))
 
 
-def _refusal_message(bind_address: str, dev_mode: bool) -> str:
-    lines = [
-        f"Refusing to start: the external API (/api/v1/*) would be reachable without "
-        f"authentication (user or machine credential unavailable, ip={bind_address}).",
-        "",
-        "HTTPS alone does not authenticate callers. Configure external.auth.mode=auto/bearer "
-        "with ORCH_API_TOKEN (at least 32 bytes), or verified mTLS. Also configure user authentication.",
-        "",
-        "Two ways to fix it:",
-        "  1. configure a credential: set access_password in etc/conf/server.conf (generate "
-        "one with 'python generate_access_password.py'), or name a first-boot source with "
-        f"admin_initial_password_file, or export {ADMIN_INITIAL_PASSWORD_ENV};",
-        "  2. for local demos only, bind ip=127.0.0.1 and explicitly set security.dev_insecure_mode=true.",
-    ]
-    if dev_mode:
-        lines += [
-            "",
-            f"{DEV_INSECURE_MODE_KEY}=true is set, but it does not lift this: the flag only "
-            "covers a loopback bind, where the exposure does not exist.",
-        ]
-    return "\n".join(lines)
+def _refusal_message(conf: dict, mode: str, external_ready: bool) -> str:
+    if mode != "user" and not external_ready:
+        guidance = {
+            "bearer": "Configure the selected static-token environment variable (at least 32 UTF-8 bytes).",
+            "mtls": "Enable HTTPS and client-certificate verification for the selected mTLS provider.",
+            "custom": "Register an AUTHENTICATE_EXTERNAL handler for the selected custom provider.",
+        }[mode]
+        return (f"Refusing to start: external.auth.mode={mode} is not configured. {guidance} "
+                "For account login, remove external.auth.mode or set it to user.")
+    from common.util.persistence_mode import is_db_mode
+    if is_db_mode(conf):
+        guidance = ("Check database connectivity and existing users. For an empty user store, set "
+                    f"{ADMIN_INITIAL_PASSWORD_ENV} or admin_initial_password_file for first boot.")
+    else:
+        guidance = ("Set access_password using 'python generate_access_password.py', "
+                    "or supply its password hash through ORCH_ACCESS_PASSWORD.")
+    return ("Refusing to start: account authentication is not configured. " + guidance +
+            " HTTP, HTTPS and loopback access use the same account login.")

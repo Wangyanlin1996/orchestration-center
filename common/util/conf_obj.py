@@ -26,7 +26,11 @@ DEFAULT_SSL_CERT_FILE = 'etc/ssl/server.cer'
 DEFAULT_SSL_KEYFILE = 'etc/ssl/server_key.pem'
 DEFAULT_KEY_PASSWORD = 'etc/ssl/cert_pwd'
 DEFAULT_SSL_CA_CERTS = 'etc/ssl/trust.cer'
-DEFAULT_SSL_CRLFILE = 'etc/ssl/revocationlist.crl'
+# No default CRL path: revocation checking is opt-in. CRLValidator treats an
+# empty ssl_crl_file as "CRL not config" and passes, so a deployment without
+# the key keeps starting; shipping a default path would fail every startup
+# that has no CRL file on disk.
+DEFAULT_SSL_CRLFILE = ""
 DEFAULT_VERIFY_CLIENT = ssl.CERT_REQUIRED
 
 def as_absolute_path(path):

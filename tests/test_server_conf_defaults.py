@@ -65,3 +65,11 @@ class TestShippedServerConfDefaults:
         conf = _parse_conf_file(_SERVER_CONF_PATH)
         obj = ConfObj.as_object(conf)
         assert obj.verify_client == ssl.CERT_REQUIRED
+
+    def test_ssl_crl_file_is_discoverable_in_template(self):
+        conf = _parse_conf_file(_SERVER_CONF_PATH)
+        assert "ssl_crl_file" in conf, (
+            "ssl_crl_file is supported by ConfObj/CertValidator but missing "
+            "from the shipped template, leaving revocation checking "
+            "undiscoverable for file-based deployments"
+        )
