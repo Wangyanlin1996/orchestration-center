@@ -1177,7 +1177,7 @@ async def execute_workflow(
         intent = user_intent or psop.name or psop_id
         return await dispatch_intent_sse(
             agent_cards, intent, target_agent=target_agent, lang=lang,
-            semaphore=execute_semaphore,
+            semaphore=execute_semaphore, psop=psop,
         )
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")

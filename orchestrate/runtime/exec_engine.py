@@ -18,8 +18,8 @@
 """OrchestrationEngine -- thin A2A-T channel to the Workbench Agent.
 
 The orchestration center:
-1. Searches/loads the PSOP (for frontend graph preview via psop_update)
-2. Sends the intent to the Workbench Agent via A2A-T
+1. Uses the caller-selected PSOP, or searches by intent when none is supplied
+2. Sends the intent and selected PSOP snapshot to the Workbench Agent via A2A-T
 3. Streams back SDK events from TaskUpdate metadata to the frontend SSE
 
 All workflow execution logic (ControlPoint, extension pre-positioning,
@@ -39,6 +39,7 @@ from loguru import logger
 from workflow_engine import A2ATransport, MessageContent, WorkflowEngineClient
 
 from orchestrate.core.shared_handlers import SharedHandlers
+from orchestrate.core.model.psop import PSOP
 
 try:
     from a2a_t.llm.factory import LLMClientFactory as _LLMFactory
@@ -91,40 +92,43 @@ class OrchestrationEngine:
         )
         return WorkflowEngineClient.owning(transport, max_negotiation_exchanges=3)
 
-    async def events(self, intent: str) -> AsyncIterator[dict]:
-        """Search PSOP for preview, dispatch to target agent, stream back events."""
-        yield {
-            "type": "start",
-            "data": {"workflow": intent[:80], "intent": intent, "phase": "searching", "target_agent": self._target_agent},
-            "timestamp": time.time(),
-        }
-
-        logger.info("[Orchestration] Searching PSOP for target agent {}", self._target_agent)
-        retrieval = SharedHandlers.retrieval()
-        results = await asyncio.to_thread(retrieval.retrieve_psop_by_intent_topn, intent, 3)
-
-        psop_model = None
-        if results:
-            psop_id = results[0].workflow_id
-            workflow_name = results[0].name or psop_id
-            logger.info(f"[Orchestration] Found PSOP: {psop_id} ({workflow_name})")
-
+    async def events(self, intent: str, *, psop: PSOP | None = None) -> AsyncIterator[dict]:
+        """Relay an explicit snapshot, or select by intent if none was supplied."""
+        psop_model = psop.model_copy(deep=True) if psop is not None else None
+        if psop_model is None:
             yield {
                 "type": "start",
-                "data": {"workflow": workflow_name, "workflow_id": psop_id, "phase": "loading"},
+                "data": {"workflow": intent[:80], "intent": intent, "phase": "searching", "target_agent": self._target_agent},
+                "timestamp": time.time(),
+            }
+            logger.info("[Orchestration] Searching PSOP for target agent {}", self._target_agent)
+            retrieval = SharedHandlers.retrieval()
+            results = await asyncio.to_thread(retrieval.retrieve_psop_by_intent_topn, intent, 3)
+            if results:
+                psop_id = results[0].workflow_id
+                yield {
+                    "type": "start",
+                    "data": {"workflow": results[0].name or psop_id, "workflow_id": psop_id, "phase": "loading"},
+                    "timestamp": time.time(),
+                }
+                loaded = await asyncio.to_thread(retrieval.get_psop_by_id, psop_id)
+                if loaded is not None:
+                    psop_model = loaded.model_copy(deep=True)
+            else:
+                logger.warning("[Orchestration] No matching PSOP found, dispatching raw intent")
+        else:
+            yield {
+                "type": "start",
+                "data": {"workflow": psop_model.name, "workflow_id": psop_model.id, "phase": "loading"},
                 "timestamp": time.time(),
             }
 
-            psop_model = await asyncio.to_thread(retrieval.get_psop_by_id, psop_id)
-            if psop_model:
-                logger.info(f"[Orchestration] Loaded workflow: {psop_model.name} ({len(psop_model.steps)} steps)")
-                yield {
-                    "type": "psop_update",
-                    "data": {"psop": psop_model.model_dump()},
-                    "timestamp": time.time(),
-                }
-        else:
-            logger.warning("[Orchestration] No matching PSOP found, dispatching raw intent")
+        if psop_model is not None:
+            yield {
+                "type": "psop_update",
+                "data": {"psop": psop_model.model_dump(mode="json")},
+                "timestamp": time.time(),
+            }
 
         engine_client = self._get_engine_client()
 

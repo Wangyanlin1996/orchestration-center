@@ -359,6 +359,7 @@ async def execute_psop_by_id(
         intent = user_intent or psop.name or psop_id
         return await dispatch_intent_sse(
             await get_agent_cards(), intent, lang=lang, semaphore=execute_semaphore,
+            psop=psop,
         )
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")

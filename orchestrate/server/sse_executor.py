@@ -37,6 +37,7 @@ from a2a.types import AgentCard
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
+from orchestrate.core.model.psop import PSOP
 from orchestrate.runtime.exec_engine import OrchestrationEngine
 
 _EVENT_QUEUE_CAPACITY = 64
@@ -64,13 +65,16 @@ async def dispatch_intent_sse(
     target_agent: str = None,
     lang: str = None,
     semaphore: anyio.Semaphore | None = None,
+    *,
+    psop: PSOP | None = None,
 ) -> StreamingResponse:
     """Dispatch an intent to a host agent via A2A-T and stream events.
 
     Slim orchestration: the orchestration center does NOT execute the
-    workflow itself. It sends the intent to the target host agent, which
-    searches/loads the PSOP, executes it via the SDK, and streams SDK
-    events back as A2A-T TaskUpdate metadata (__sdk_event__).
+    workflow itself. A supplied PSOP is captured as a detached snapshot
+    and sent with the intent, without another intent search. Without one,
+    the center searches by intent; the Host resolves a workflow only if
+    no snapshot was found. Execution stays in the Host's SDK.
 
     This function drains the A2A-T response stream, extracts the SDK
     events from metadata, and forwards them to the frontend SSE.
@@ -79,7 +83,7 @@ async def dispatch_intent_sse(
         semaphore.acquire_nowait()
 
     try:
-        response = _build_sse_response(agent_cards, intent, target_agent, lang)
+        response = _build_sse_response(agent_cards, intent, target_agent, lang, psop)
     except BaseException:
         if semaphore is not None:
             semaphore.release()
@@ -88,8 +92,12 @@ async def dispatch_intent_sse(
 
 
 def _build_sse_response(
-    agent_cards: List[AgentCard], intent: str, target_agent: str | None, lang: str | None
+    agent_cards: List[AgentCard], intent: str, target_agent: str | None, lang: str | None,
+    psop: PSOP | None = None,
 ) -> StreamingResponse:
+    # Capture before the deferred response body starts; later edits must not
+    # change the workflow the caller selected for this execution.
+    selected_psop = psop.model_copy(deep=True) if psop is not None else None
     if not agent_cards:
         async def error_stream():
             yield f"data: {json.dumps({'type': 'error', 'message': 'No agent cards available'}, ensure_ascii=False)}\n\n"
@@ -113,9 +121,9 @@ def _build_sse_response(
         started_at = datetime.now(timezone.utc)
         collected_events = deque(maxlen=_RECORDED_EVENT_LIMIT)
         dropped_events = 0
-        psop_id = ""
-        psop_name = ""
-        final_psop = None
+        psop_id = selected_psop.id if selected_psop is not None else ""
+        psop_name = selected_psop.name if selected_psop is not None else ""
+        final_psop = selected_psop.model_dump(mode="json") if selected_psop is not None else None
         record_status = ExecutionStatus.SUCCESS
         record_error = None
         saw_terminal_event = False
@@ -126,7 +134,10 @@ def _build_sse_response(
         done_sentinel = object()
 
         async def _drain_engine():
-            event_stream = engine.events(intent)
+            event_stream = (
+                engine.events(intent, psop=selected_psop)
+                if selected_psop is not None else engine.events(intent)
+            )
             try:
                 async for event in event_stream:
                     await event_queue.put(event)
