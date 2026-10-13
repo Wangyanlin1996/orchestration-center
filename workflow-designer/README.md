@@ -50,7 +50,7 @@ In plugin mode, `src/index.jsx` consumes `usePortalContext()` (theme + api) and 
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (version 18 or higher recommended)
+- [Node.js](https://nodejs.org/) (Node.js 20.19+ or 22.12+ (required by Vite 7))
 - [Yarn](https://yarnpkg.com/) or [npm](https://www.npmjs.com/)
 
 ### Installation

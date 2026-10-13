@@ -31,7 +31,7 @@ python -m samples.start_agents_server
 
 ## How to run tests
 
-All tests are in `tests/` (57 files). A `conftest.py` provides shared fixtures.
+All tests are in `tests/` (file count changes; use git ls-files tests/ for the current inventory). A `conftest.py` provides shared fixtures.
 
 ```powershell
 # Run all tests
@@ -75,7 +75,7 @@ Generic execution hosting lives in `host_agent/`; it owns A2A task adaptation, w
 
 ### Config system (non-standard)
 
-Config is loaded by `common/util/config_util.py:get_conf()`. It reads `etc/conf/server.conf` then `etc/conf/server.properties` (second file overrides), parsing `key=value` lines. **All keys are lowercased**. No env-var or structured-config library is used.
+Config is loaded by `common/util/config_util.py:get_conf()`. It reads `etc/conf/server.conf` then `etc/conf/server.properties` (second file overrides), parsing `key=value` lines. **All keys are lowercased**. Explicit deployment environment aliases are applied last (see apply_env_overrides). Model YAML and database profiles are loaded by separate components.
 
 Key config keys: `ip`, `port`, `enable_https`, `persistence_mode`, `agent_registry_url`, `forwarded_allow_ips`.
 
@@ -91,7 +91,7 @@ The `WorkflowStorage` singleton is accessed via `get_workflow_storage()` (uses `
 
 Host-side A2A-T content generation reads its `A2AT_*` variables (`A2AT_LLM_PROVIDER`, `A2AT_LLM_MODEL`, `A2AT_LLM_API_KEY`, `A2AT_LLM_BASE_URL`, …) from the repo-root `.env`. The workflow engine does not initialize the retired negotiation state machine. `A2AT_*` is independent of `LLM_CHAT_*` below (no auto-derivation between the two). `A2AT_LLM_PROVIDER` names an LLM client registered in the *current* process, not a model vendor — the endpoint is whatever `A2AT_LLM_BASE_URL` points at. The SDK registers `openai` in every process, while `orchestrate.runtime.exec_engine` registers `deepseek` in the backend only, so keep the variable at `openai` unless every process registers the name it uses; any other value fails in the sample agents with `Unknown llm provider`.
 
-The orchestration backend's own LLM calls (intent parsing, retrieval) read model definitions from `etc/config/models.yaml` (path overridable through `LLM_CONFIG_FILE`); the keys under `models:` are the enabled capabilities. Only secrets come from the process environment or repo-root `.env`, which wins over the file: a definition names the variable through `api_key_env` or `auth.<field>_env`, and a literal secret in the file is rejected. `common/llm/config/model_sources.py` owns that resolution and the registered wire-protocol profiles (`openai_compatible`, with `openai` kept as an alias; `aoc_signed`); add a provider profile for a new protocol instead of hardcoding it in the loader. The legacy JSON model file is migration input only and is not a runtime source.
+The orchestration backend's own LLM calls (intent parsing, retrieval) read model definitions from `etc/config/models.yaml` (path overridable through `LLM_CONFIG_FILE`); the keys under `models:` are the enabled capabilities. Only secrets come from the process environment or repo-root `.env`; a non-empty process value wins over `.env`: a definition names the variable through `api_key_env` or `auth.<field>_env`, and a literal secret in the file is rejected. `common/llm/config/model_sources.py` owns that resolution and the registered wire-protocol profiles (`openai_compatible`, with `openai` kept as an alias; `aoc_signed`); add a provider profile for a new protocol instead of hardcoding it in the loader. The legacy JSON model file is migration input only and is not a runtime source.
 
 ### Agent authentication
 
@@ -140,7 +140,7 @@ host_agent/             # Business-neutral workflow execution host and A2A serve
 database/              # PostgreSQL / MySQL support
 etc/conf/              # server.conf, server.properties, db/ connection profiles
 samples/agent_credentials.json  # sample AgentCard credential bindings
-tests/                 # All tests (pytest, 57 files + conftest.py)
+tests/                 # All tests (pytest + conftest.py)
 data/workflow_storage/ # File-based persistence (PSOP, PreFlow, execution records)
 data/solution_packages/   # Imported solution package records + committed TM Forum IG1526A demo seed
 ```
@@ -159,7 +159,7 @@ data/solution_packages/   # Imported solution package records + committed TM For
 
 **IMPORTANT: Always follow this merge principle:**
 
-1. **Commit to fork first** — All changes must be committed to the personal fork (`zhang-penghe/orchestration-center`) before creating a PR.
+1. **Commit to fork first** — All changes must be committed to the contributor's own personal fork before creating a PR.
 2. **Create PR to upstream** — Submit PR from fork to upstream (`project-openan/orchestration-center`).
 3. **Never push directly to upstream** — Always use the fork → PR → merge workflow.
 
@@ -168,7 +168,7 @@ data/solution_packages/   # Imported solution package records + committed TM For
 - Never write a PAT, token, or password into any tracked file (including this one). Use the keyring, the `git` SSH remote, or an untracked/gitignored file (e.g. `.env`, `*.token.md`).
 
 **Local-only files (do NOT commit):**
-- `etc/conf/server.conf` — Local server configuration. Revert any local changes before committing.
+- `etc/conf/server.conf` — Local server configuration. Preserve local changes; exclude this file from staging. Edit server.conf.example for public guidance.
 - `etc/conf/db/postgresql.json` — Local PostgreSQL connection settings, including credentials. Gitignored; copy `etc/conf/db/postgresql.json.template` to get started, and never commit the real file.
 - `etc/conf/db/mysql.json` — Local MySQL settings. Gitignored and excluded from the container build; copy its `.template` and keep the password in `MYSQL_PASSWORD` / `.env`.
 

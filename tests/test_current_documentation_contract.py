@@ -37,3 +37,74 @@ def test_legacy_gcp_guard_precedes_side_effects():
     text = (ROOT / "deploy-all.ps1").read_text(encoding="utf-8")
     assert text.index('throw "Legacy GCP') < text.index("Remove-Item")
     assert text.index('throw "Legacy GCP') < text.index("Get-Command gcloud")
+
+
+@pytest.mark.parametrize("relative", [
+    "README.md", "README_zh.md", "docs/DESIGN.md",
+    "docs/en/Orchestration Center API Reference.md", "docs/zh/编排中心API参考.md",
+])
+def test_public_event_contract_does_not_invent_init_or_named_close(relative):
+    text = (ROOT / relative).read_text(encoding="utf-8")
+    assert '"type":"init"' not in text
+    assert '"type": "init"' not in text
+    assert "cancelled" in text
+
+
+@pytest.mark.parametrize("relative", ["docs/zh/用户指南.md", "docs/zh/编排中心API参考.md"])
+def test_pdf_input_heading_is_not_translated(relative):
+    from orchestrate.server import frontend_support_server
+    import inspect
+
+    source = inspect.getsource(frontend_support_server)
+    assert 'chapters_md.get("5. Interaction Flow")' in source
+    assert "5. Interaction Flow" in (ROOT / relative).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("relative", [
+    "docs/en/Orchestration Center API Reference.md", "docs/zh/编排中心API参考.md",
+])
+@pytest.mark.parametrize("outcome", ["complete", "cancelled", None])
+def test_documented_sse_parser_handles_heartbeat_unknown_events_and_cancellation(relative, outcome, monkeypatch):
+    import requests
+
+    text = (ROOT / relative).read_text(encoding="utf-8")
+    start = text.index("import json\nimport os\nfrom urllib.parse import quote")
+    snippet = text[start:text.index("\n```", start)]
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def raise_for_status(self):
+            pass
+
+        def iter_lines(self, **kwargs):
+            yield ": heartbeat"
+            yield ""
+            yield 'data: {"type":"future_extension","message":"optional payload"}'
+            if outcome is not None:
+                yield 'data: {"type":"' + outcome + '"}'
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setenv("OC_TOKEN", "test-only-token")
+    monkeypatch.setenv("PSOP_ID", "test id")
+    monkeypatch.delenv("OC_BASE_URL", raising=False)
+    monkeypatch.setattr(requests, "get", get)
+    scope = {}
+    if outcome is None:
+        with pytest.raises(RuntimeError):
+            exec(compile(snippet, relative, "exec"), scope)
+        assert scope["terminal"] is False
+    else:
+        exec(compile(snippet, relative, "exec"), scope)
+        assert scope["terminal"] is True
+    assert calls[0][0].endswith("/test%20id?lang=zh")
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer test-only-token"
+    assert "verify" not in calls[0][1]  # requests' secure default is preserved.

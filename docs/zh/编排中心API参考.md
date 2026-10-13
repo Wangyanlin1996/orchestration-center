@@ -90,8 +90,8 @@ SSE 端点（`EventSource`）使用同一会话 Cookie 认证，浏览器会自�
 
 注册新用户（仅 PostgreSQL/MySQL 模式且已设置 `auth.register.enabled=true`）：
 ```bash
-curl -X POST https://127.0.0.1:5001/rest/v1/orchestrate/auth/register \\
-  -H "Content-Type: application/json" \\
+curl -X POST https://127.0.0.1:5001/rest/v1/orchestrate/auth/register \
+  -H "Content-Type: application/json" \
   -d '{"username":"newuser","password":"<明文密码>"}'
 ```
 
@@ -126,7 +126,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
 
 - 功能描述
 
-    接收 PDF/TXT/MD 文件（PDF 解析 "5. Interaction Flow" 章节，TXT/MD 直接读取全文）或 JSON 格式的 SOP 步骤文本，结合可用 Agent 列表，由 LLM 生成 PSOP 工作流并自动保存。
+    接收 PDF/TXT/MD 文件（PDF 章节标题必须精确为 `5. Interaction Flow`，即交互流程；TXT/MD 直接读取全文）或 JSON 格式的 SOP 步骤文本，结合可用 Agent 列表，由 LLM 生成 PSOP 工作流并自动保存。
 
 - 接口约束
 
@@ -189,6 +189,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
     POST /api/v1/orchestrate/sop HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "sop_content": "## 节能流程\n1. 收集设备状态数据\n2. 分析能耗基线\n3. 执行节能策略",
@@ -205,7 +206,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
     | status   | string | `"success"`                    |
     | data     | object | 生成的 PSOP 工作流完整对象      |
 
-    **PSOP 对象结构（data 字段）**: 参见 [附录 A：PSOP 数据结构](#附录-a-psop-数据结构)。
+    **PSOP 对象结构（data 字段）**: 参见 [附录 A：PSOP 数据结构](#附录-apsop-数据结构)。
 
 - 响应示例
 
@@ -277,6 +278,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
     POST /api/v1/orchestrate/intent HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "intent": "帮我做一次全网节能优化",
@@ -358,6 +360,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
     POST /api/v1/orchestrate/search HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "intent": "帮我做一次网络故障根因分析",
@@ -464,7 +467,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
 
 - 返回参数（data 字段）
 
-  详见 [PSOP 数据结构](#附录-a-psop-数据结构)。
+  详见 [PSOP 数据结构](#附录-apsop-数据结构)。
 
 - 错误码
 
@@ -475,74 +478,53 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
 
 ---
 
-### SSE 事件类型说明
+### SSE 事件契约
 
-以下执行接口（`POST /orchestrate/execute`、`GET /orchestrate/execute/{psop_id}`）通过 SSE（Server-Sent Events）实时推送执行进度。每条 SSE 消息格式为：
+执行接口返回 `text/event-stream`。从 `data:` 帧解析 JSON，忽略空行和 `: heartbeat` 等心跳注释。转发层保留 SDK 原始载荷，不把所有帧统一成固定字段结构。多数事件使用 `type`/`data`/`timestamp`，早期错误也可能仅带顶层 `message`；字段取决于事件生产方，不能假定总有 agent、request 或 execution_history。
 
-```
-data: {"type": "<事件类型>", "data": {<事件数据>}, "timestamp": <时间戳>}
-```
+| 事件族 | 含义与消费方式 |
+| --- | --- |
+| `start` | 搜索、加载或下发阶段，可能多次出现；存在时读取 `data.phase`。 |
+| `psop_update` | `data.psop` 中的工作流快照，兼容对象或序列化 JSON。 |
+| SDK 事件 | 原样转发任务、步骤、Agent、路由、协商、通知和授权等事件，不是固定十一种；未知类型应安全忽略或记录类型。 |
+| `complete`、`error`、`cancelled` | 执行终态，取消不代表成功；错误说明可能在 data 或顶层 message。 |
 
-### 事件类型一览
+编排中心不生成 `init`，也不保证发送命名 `event: close` 或 JSON `close` 帧。通过传输 EOF 判断连接结束；没有执行终态的 EOF 不能视为成功。心跳只表示连接活跃。这里是单任务执行流，不是与任务状态无关的独立 Notification-T 订阅。
 
-| 事件类型         | 说明 | 触发时机 | data 字段关键内容 |
-|-----------------|------|----------|-------------------|
-| `init`          | 引擎初始化完成 | 执行开始时 | `psop_id` — 工作流 ID |
-| `start`         | 流程开始执行 | init 之后 | `psop_id`, `message` |
-| `agent_request` | 向 Agent 发送任务 | 每步开始时 | `agent` — 目标 agent 名, `request` — protobuf 格式的请求体 |
-| `agent_response`| Agent 返回结果 | 每步完成时 | `agent` — 来源 agent 名, `response` — protobuf 格式的响应体 |
-| `negotiation_request` | 协商请求发送 | 引擎发起 A2A-T 协商时 | `agent`, `negotiation_id` |
-| `negotiation_resolved` | 协商达成一致 | 协商达成协议时 | `agent`, `negotiation_id`, `resolution` |
-| `negotiation_failed` | 协商失败 | 协商被拒绝或超时时 | `agent`, `negotiation_id`, `reason` |
-| `psop_update`   | 工作流状态更新 | 每步完成后 | `psop` — 完整 PSOP JSON（含各任务 status: pending/success/failed） |
-| `complete`      | 工作流执行完成 | 所有步骤完成后 | `psop_id`, `execution_history` — 步骤级执行历史 |
-| `error`         | 执行异常 | 执行失败或取消时 | `psop_id`, `error` — 错误描述 |
-| `close`         | SSE 连接关闭 | complete/error 之后 | 空 `{}` |
-
-### SSE 事件推送示例
-
-**正常流程序列：**
-```
-init → start → agent_request → agent_response → psop_update
-  → agent_request → agent_response → psop_update
-  → ... (每步重复) ...
-  → complete → close
-```
-
-**错误中断序列：**
-```
-init → start → ... → error → close
-```
+执行记录只保存有界事件尾部（当前上限 1000），丢弃早期事件时在 events 数组头部增加 type=events_truncated、data.dropped 标记事件（最多 1000 条保留事件加该标记）。转发层不重建完整 `execution_history`，该字段可能为空，不能承诺完整回放。
 
 ### 解析示例（Python）
 
-```python
-import requests, json
-resp = requests.get(
-    "http://127.0.0.1:5001/api/v1/orchestrate/execute/{psop_id}?lang=zh",
-    stream=True,
-)
-for line in resp.iter_lines(decode_unicode=True):
-    if not line or not line.startswith("data: "):
-        continue
-    event = json.loads(line[6:])
-    etype = event["type"]
-    if etype == "agent_request":
-        print(f"→ {event['data']['agent']}")
-    elif etype == "agent_response":
-        print(f"← {event['data']['agent']}")
-    elif etype == "psop_update":
-        psop = event["data"].get("psop", {})
-        if isinstance(psop, str):
-            psop = json.loads(psop)
-        for step in psop.get("steps", []):
-            print(f"  {step['name']}: {[t['status'] for t in step['subtasks']]}")
-    elif etype in ("complete", "error"):
-        print(f"[{etype}]")
-        break
-```
+先通过账号登录取得 `OC_TOKEN`，将 `PSOP_ID` 设置为已保存工作流 ID。下面使用本机 HTTP；HTTPS 设置 `OC_BASE_URL`，通过 `REQUESTS_CA_BUNDLE` 信任部署 CA。监听器开启 mTLS 时还需提供客户端证书/私钥。生产不要关闭服务端证书校验。
 
----
+```python
+import json
+import os
+from urllib.parse import quote
+import requests
+
+base = os.environ.get("OC_BASE_URL", "http://127.0.0.1:5001").rstrip("/")
+psop_id = quote(os.environ["PSOP_ID"], safe="")
+terminal = False
+with requests.get(
+    f"{base}/api/v1/orchestrate/execute/{psop_id}?lang=zh",
+    headers={"Authorization": f"Bearer {os.environ['OC_TOKEN']}"},
+    stream=True,
+    timeout=(10, 60),  # 读取空闲超时；编排中心通常每 15 秒发送心跳
+) as response:
+    response.raise_for_status()
+    for line in response.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        event = json.loads(line[5:].strip())
+        kind = event.get("type")
+        print(kind)  # 共享日志中不输出可能敏感的事件载荷。
+        if kind in {"complete", "error", "cancelled"}:
+            terminal = True
+            break
+if not terminal:
+    raise RuntimeError("执行流结束，但未收到执行终态")
+```
 
 ## 4. 自动编排+执行接口
 
@@ -583,6 +565,7 @@ for line in resp.iter_lines(decode_unicode=True):
     POST /api/v1/orchestrate/execute HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "task": "帮我做一次网络故障根因分析",
@@ -592,48 +575,7 @@ for line in resp.iter_lines(decode_unicode=True):
 
 - 响应格式（SSE 事件流）
 
-    响应为 `text/event-stream`，事件格式如下：
-
-    ```
-    data: {"type": "init", "data": {...}}
-    data: {"type": "start", "data": {...}}
-    data: {"type": "agent_request", "data": {...}}
-    data: {"type": "agent_response", "data": {...}}
-    data: {"type": "psop_update", "data": {...}}
-    data: {"type": "complete", "data": {...}}
-    event: close
-    data: {}
-    ```
-
-    **SSE 事件类型说明：**
-
-    | 事件类型       | 描述                                                    |
-    |----------------|---------------------------------------------------------|
-    | init           | 执行引擎初始化，包含 `psop_id`                           |
-    | start          | 执行开始通知                                            |
-    | agent_request  | Agent 任务下发事件，包含 `agent`（Agent名称）、`request`（下发请求内容） |
-    | agent_response | Agent 执行结果返回事件，包含 `agent`（Agent名称）、`response`（执行结果内容） |
-    | psop_update    | PSOP 工作流状态更新，包含 `psop`（完整 PSOP 对象，含各子任务最新状态） |
-    | complete       | 所有步骤执行完成，包含 `execution_history` 汇总           |
-    | error          | 执行失败，包含 `error` 描述                              |
-    | close          | SSE 流结束信号                                          |
-
-    每个事件 JSON 包含 `type`（事件类型）、`data`（事件数据）、`timestamp`（时间戳）三个字段。
-
-    执行完成后，系统自动保存 `ExecutionRecord` 执行记录，可通过 [查询执行结果详情](#7-查询执行结果详情) 获取详情。
-
-- 响应示例
-
-    ```
-    data: {"type":"init","data":{"psop_id":"a1b2c3d4-...","message":"Initializing execution engine"},"timestamp":12345.67}
-    data: {"type":"start","data":{"psop_id":"a1b2c3d4-...","message":"Execution started"},"timestamp":12345.68}
-    data: {"type":"agent_request","data":{"agent":"RAN Energy Saver","request":"{\"message\":...}"},"timestamp":12345.70}
-    data: {"type":"agent_response","data":{"agent":"RAN Energy Saver","response":"{\"status\":{\"state\":\"TASK_STATE_COMPLETED\"},...}"},"timestamp":12346.50}
-    data: {"type":"psop_update","data":{"psop":{"id":"...","steps":[...]}},"timestamp":12346.51}
-    data: {"type":"complete","data":{"psop_id":"a1b2c3d4-...","execution_history":[...]},"timestamp":12347.00}
-    event: close
-    data: {}
-    ```
+  载荷、EOF 与心跳语义见上方 SSE 事件契约。一种可能序列是 `start → SDK 事件 → psop_update → complete → EOF`，具体顺序与次数取决于工作流。失败和取消使用 `error`/`cancelled`，不是成功 `complete`。执行记录有大小边界，不是完整会话记录。
 
 - 错误码
 
@@ -647,6 +589,8 @@ for line in resp.iter_lines(decode_unicode=True):
 ---
 
 ## 5. 执行指定工作流接口
+
+> **工作流绑定**：中心加载请求指定的 PSOP，将其 ID 与独立快照下发给 Host Agent，不再按意图重新检索。`user_intent` 只提供运行上下文，不会重新选择工作流；快照捕获后的编辑只影响后续执行。Host 对无效或不一致的显式元数据报错，不降级为意图检索。指定 PSOP 不存在时，在下发前返回 HTTP 404；流已建立后的 Host 校验失败通过 SSE `error` 表达。内部 `/rest/v1/orchestrate/execute?psop_id=...` 同样遵循此规则。仅按意图执行仍是独立的选择路径。
 
 - 典型场景
 
@@ -980,3 +924,16 @@ for line in resp.iter_lines(decode_unicode=True):
                     │ 查询执行结果详情               │
                     └──────────────────────────────┘
 ```
+
+## 前端内部接口补充
+
+以下路径使用 `/rest/v1/orchestrate`，不是 `/api/v1`。遵循浏览器会话及允许的内部身份策略；AgentCard 写操作需要管理员权限。
+
+| 方法 | 相对路径 | 入参与结果 |
+| --- | --- | --- |
+| GET | `/solution-packages` | 列出已保存方案包 |
+| GET / DELETE | `/solution-packages/{pdf_filename}` | 获取/删除指定方案包，不存在返回 404 |
+| PUT / DELETE | `/agent-cards/{organization}/{name}` | 管理员注册中心代理；PUT 卡片名称/组织必须匹配路径 |
+| GET | `/dispatch` | 必填 intent、agent_name，可选 lang；返回单个已注册 Agent 的 SSE |
+
+名称中的空格等必须逐路径段 URL 编码；不存在删除全部方案包的 `DELETE /solution-packages`。沙箱接口见第 8 节。

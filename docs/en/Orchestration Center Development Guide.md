@@ -158,7 +158,7 @@ class MyCustomHandle(BaseHandler):
         """
         # Custom implementation
         # Recommendation: add specific business logic here
-        # Note: ensure the method is asynchronous
+        # Storage handler.handle is synchronous; async auth hooks are a different interface.
         result = "Custom result"
         return result
 ```
@@ -342,7 +342,7 @@ The internal API (`/rest/v1/orchestrate/*`) supports token-based authentication 
 **Database mode (`persistence_mode=postgresql` or `mysql`)**:
 - **User store**: `database/utils/user_store.py` -- CRUD operations on PostgreSQL/MySQL `users` table with versioned bcrypt password hashes
 - **First boot**: an empty SQL user store requires `OC_ADMIN_INITIAL_PASSWORD` or `admin_initial_password_file`; `seed_admin_if_empty()` creates `admin` from that secret. Existing users are not reset. Change the initial password in the UI and log in again.
-- **Registration**: `POST /auth/register` endpoint available, username format validated, password complexity checked on frontend
+- **Registration**: `POST /auth/register` endpoint available, username format validated, password complexity enforced by the backend (the UI also validates input)
 - **User management**: `GET /auth/users` (list), `DELETE /auth/users/{username}` (delete, admin protected)
 - **Auth module**: `orchestrate/server/auth.py` -- `SessionStore` maps token to (username, expiry), `auth_middleware`
 - **Auth endpoints**: `POST /auth/login`, `POST /auth/register`, `POST /auth/logout`, `GET /auth/check`, `GET /auth/users`, `DELETE /auth/users/{username}`
@@ -441,12 +441,12 @@ client certificates from that CA instead.
 Outbound HTTPS calls (e.g., orchestration center -> registry center) use a shared SSL context factory:
 
 - **Module**: `workflow_engine.client.ssl_context` -- `create_ssl_context()` (provided by the workflow-engine SDK)
-- **Config**: `client_verify_server` in `server.conf` (default: `false` for backward compat)
+- **Config**: `client_verify_server` in `server.conf` (default: `true` in the public template and main-service factories)
 - **Features**: CA trust store verification, optional mTLS client cert, CRL checking, cipher suite enforcement
 - **Usage**: Called as `create_ssl_context(verify_server=...)` and passed to `httpx.AsyncClient(verify=...)` in `orchestrate/registry_client/client.py`
 
-When `client_verify_server=false`, the SSL context returns `False` (no verification), allowing connections to servers with self-signed certificates. Set to `true` in production with a properly configured CA trust store.
+When verification is disabled, an mTLS client identity is still loaded into an SSLContext; only server chain/hostname verification is disabled. Without client identity the client may use `verify=False`. Conflicting CA/CRL settings are rejected. Keep verification enabled with the correct CA in production; see [transport runtime](../transport-runtime.md).
 
 ### 6.4 External API Protection
 
-The external API (`/api/v1/*`) is protected by mTLS at the TLS layer. No application-layer auth middleware is needed -- the TLS handshake rejects connections without valid client certificates before any HTTP request reaches the application.
+Public `/api/v1/*` uses the same configured account as web login. Obtain a Bearer from `POST /api/v1/auth/token` and send it in `Authorization`; cookies/URL tokens do not authenticate public APIs. HTTP and HTTPS both require application authentication. `verify_client=true` adds an independent mTLS handshake requirement; a proxy certificate or a client's `verify=False` never substitutes for an account Token. See section 6.1 for bootstrap, expiry and revocation.

@@ -197,6 +197,7 @@ integrations are described in [transport configuration](../transport-runtime.md)
     POST /api/v1/orchestrate/sop HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "sop_content": "## Energy Saving Process\n1. Collect device status data\n2. Analyze energy consumption baseline\n3. Execute energy saving strategy",
@@ -285,6 +286,7 @@ integrations are described in [transport configuration](../transport-runtime.md)
     POST /api/v1/orchestrate/intent HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "intent": "Help me perform a network-wide energy saving optimization",
@@ -366,6 +368,7 @@ integrations are described in [transport configuration](../transport-runtime.md)
     POST /api/v1/orchestrate/search HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "intent": "Help me perform a network fault root cause analysis",
@@ -483,74 +486,53 @@ integrations are described in [transport configuration](../transport-runtime.md)
 
 ---
 
-### SSE Event Type Description
+### SSE Event Contract
 
-The following execution endpoints (`POST /orchestrate/execute`, `GET /orchestrate/execute/{psop_id}`) push real-time execution progress via SSE (Server-Sent Events). Each SSE message has the format:
+Execution endpoints return `text/event-stream`. Parse JSON from `data:` frames; ignore blank lines and heartbeat comments such as `: heartbeat`. The relay preserves SDK payloads rather than normalizing every frame to one schema. Most frames use `type`/`data`/`timestamp`; early errors can carry a top-level `message`. Fields are event-specific and optional unless defined by the producing SDK.
 
-```
-data: {"type": "<event type>", "data": {<event data>}, "timestamp": <timestamp>}
-```
+| Event family | Meaning and consumer guidance |
+| --- | --- |
+| `start` | Search/load/dispatch phase; may occur multiple times. Inspect `data.phase` when present. |
+| `psop_update` | Workflow snapshot in `data.psop`; tolerate object or serialized JSON. |
+| SDK events | Task, step, agent, routing, negotiation, notification and authorization events are passed through; the set is not a closed list of eleven events. Ignore/log unknown types safely. |
+| `complete`, `error`, `cancelled` | Execution outcomes. Cancellation is not successful completion. Error text may be in data or top-level message. |
 
-### Event Type Reference
+There is no center-generated `init` event and no guaranteed named `event: close` or JSON `close` frame. Detect transport EOF; EOF without a terminal outcome must not be interpreted as success. Heartbeats mean the connection is active, not that execution succeeded. This is a task execution stream, not the independent, task-state-agnostic Notification-T subscription.
 
-| Event Type      | Description                | Trigger Timing         | Key data Field Contents          |
-|-----------------|----------------------------|------------------------|----------------------------------|
-| `init`          | Engine initialization complete | At execution start | `psop_id` — Workflow ID       |
-| `start`         | Workflow execution begins  | After `init`           | `psop_id`, `message`           |
-| `agent_request` | Task sent to Agent         | At each step start     | `agent` — target agent name, `request` — protobuf-formatted request body |
-| `agent_response`| Agent returns result       | At each step completion | `agent` — source agent name, `response` — protobuf-formatted response body |
-| `negotiation_request` | Negotiation request sent | When engine initiates A2A-T negotiation | `agent`, `negotiation_id` |
-| `negotiation_resolved` | Negotiation resolved | When negotiation reaches agreement | `agent`, `negotiation_id`, `resolution` |
-| `negotiation_failed` | Negotiation failed | When negotiation is rejected or times out | `agent`, `negotiation_id`, `reason` |
-| `psop_update`   | Workflow status update     | After each step        | `psop` — complete PSOP JSON (with task status: pending/success/failed) |
-| `complete`      | Workflow execution complete | After all steps are done | `psop_id`, `execution_history` — step-level execution history |
-| `error`         | Execution exception        | On execution failure or cancellation | `psop_id`, `error` — error description |
-| `close`         | SSE connection closed      | After `complete`/`error` | Empty `{}`                    |
-
-### SSE Event Push Example
-
-**Normal Flow Sequence:**
-```
-init → start → agent_request → agent_response → psop_update
-  → agent_request → agent_response → psop_update
-  → ... (repeat per step) ...
-  → complete → close
-```
-
-**Error Interruption Sequence:**
-```
-init → start → ... → error → close
-```
+The execution record retains a bounded tail of events (currently 1000) and prepends an `events_truncated` sentinel event with `data.dropped` when earlier frames were discarded (1000 retained events plus that marker). `execution_history` is not reconstructed by this relay and may be empty; do not promise complete replay from the stored record.
 
 ### Parsing Example (Python)
 
-```python
-import requests, json
-resp = requests.get(
-    "http://127.0.0.1:5001/api/v1/orchestrate/execute/{psop_id}?lang=zh",
-    stream=True,
-)
-for line in resp.iter_lines(decode_unicode=True):
-    if not line or not line.startswith("data: "):
-        continue
-    event = json.loads(line[6:])
-    etype = event["type"]
-    if etype == "agent_request":
-        print(f"→ {event['data']['agent']}")
-    elif etype == "agent_response":
-        print(f"← {event['data']['agent']}")
-    elif etype == "psop_update":
-        psop = event["data"].get("psop", {})
-        if isinstance(psop, str):
-            psop = json.loads(psop)
-        for step in psop.get("steps", []):
-            print(f"  {step['name']}: {[t['status'] for t in step['subtasks']]}")
-    elif etype in ("complete", "error"):
-        print(f"[{etype}]")
-        break
-```
+Set `OC_TOKEN` from the account login response, and `PSOP_ID` to an existing workflow ID. The example uses local HTTP; for HTTPS set `OC_BASE_URL` and trust a deployment CA via `REQUESTS_CA_BUNDLE`. If the listener requires mTLS, additionally supply your client certificate/key. Do not disable TLS verification in production.
 
----
+```python
+import json
+import os
+from urllib.parse import quote
+import requests
+
+base = os.environ.get("OC_BASE_URL", "http://127.0.0.1:5001").rstrip("/")
+psop_id = quote(os.environ["PSOP_ID"], safe="")
+terminal = False
+with requests.get(
+    f"{base}/api/v1/orchestrate/execute/{psop_id}?lang=zh",
+    headers={"Authorization": f"Bearer {os.environ['OC_TOKEN']}"},
+    stream=True,
+    timeout=(10, 60),  # read idle timeout; center heartbeats normally arrive every 15s
+) as response:
+    response.raise_for_status()
+    for line in response.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        event = json.loads(line[5:].strip())
+        kind = event.get("type")
+        print(kind)  # Avoid printing sensitive payloads in shared logs.
+        if kind in {"complete", "error", "cancelled"}:
+            terminal = True
+            break
+if not terminal:
+    raise RuntimeError("Execution stream ended without a terminal outcome")
+```
 
 ## 4. Auto-Orchestration + Execution Interface
 
@@ -591,6 +573,7 @@ for line in resp.iter_lines(decode_unicode=True):
     POST /api/v1/orchestrate/execute HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "task": "Help me perform a network fault root cause analysis",
@@ -600,48 +583,7 @@ for line in resp.iter_lines(decode_unicode=True):
 
 - Response Format (SSE Event Stream)
 
-    Response is of type `text/event-stream`, with the following event format:
-
-    ```
-    data: {"type": "init", "data": {...}}
-    data: {"type": "start", "data": {...}}
-    data: {"type": "agent_request", "data": {...}}
-    data: {"type": "agent_response", "data": {...}}
-    data: {"type": "psop_update", "data": {...}}
-    data: {"type": "complete", "data": {...}}
-    event: close
-    data: {}
-    ```
-
-    **SSE Event Type Description:**
-
-    | Event Type     | Description                                                                                     |
-    |----------------|-------------------------------------------------------------------------------------------------|
-    | init           | Execution engine initialization, includes `psop_id`                                            |
-    | start          | Execution start notification                                                                    |
-    | agent_request  | Agent task dispatch event, includes `agent` (Agent name), `request` (dispatch request content) |
-    | agent_response | Agent execution result return event, includes `agent` (Agent name), `response` (execution result content) |
-    | psop_update    | PSOP workflow status update, includes `psop` (complete PSOP object with latest subtask statuses) |
-    | complete       | All steps execution complete, includes `execution_history` summary                              |
-    | error          | Execution failed, includes `error` description                                                  |
-    | close          | SSE stream end signal                                                                           |
-
-    Each event JSON contains three fields: `type` (event type), `data` (event data), `timestamp` (timestamp).
-
-    After execution completes, the system automatically saves the `ExecutionRecord`. Details can be retrieved via the [Query Execution Result Interface](#7-query-execution-result-details).
-
-- Response Example
-
-    ```
-    data: {"type":"init","data":{"psop_id":"a1b2c3d4-...","message":"Initializing execution engine"},"timestamp":12345.67}
-    data: {"type":"start","data":{"psop_id":"a1b2c3d4-...","message":"Execution started"},"timestamp":12345.68}
-    data: {"type":"agent_request","data":{"agent":"RAN Energy Saver","request":"{\"message\":...}"},"timestamp":12345.70}
-    data: {"type":"agent_response","data":{"agent":"RAN Energy Saver","response":"{\"status\":{\"state\":\"TASK_STATE_COMPLETED\"},...}"},"timestamp":12346.50}
-    data: {"type":"psop_update","data":{"psop":{"id":"...","steps":[...]}},"timestamp":12346.51}
-    data: {"type":"complete","data":{"psop_id":"a1b2c3d4-...","execution_history":[...]},"timestamp":12347.00}
-    event: close
-    data: {}
-    ```
+  See the SSE Event Contract above for payload/EOF/heartbeat semantics. A possible sequence is `start → SDK events → psop_update → complete → EOF`; ordering and repetition depend on the workflow. Failures and cancellations use `error`/`cancelled`, not a successful `complete`. Execution records are bounded, not a full transcript.
 
 - Error Codes
 
@@ -655,6 +597,8 @@ for line in resp.iter_lines(decode_unicode=True):
 ---
 
 ## 5. Execute Specific Workflow Interface
+
+> **Workflow binding:** the center loads the requested PSOP and forwards its ID and a detached snapshot to the Host Agent without another intent search. `user_intent` supplies runtime context; it does not select a different workflow. Edits after snapshot capture apply only to subsequent executions. The Host rejects invalid or mismatched explicit metadata rather than falling back to an intent search. A missing requested PSOP returns HTTP 404 before dispatch; Host-side validation failures are reported through SSE `error` after streaming starts. The internal `/rest/v1/orchestrate/execute?psop_id=...` route follows the same binding rule. Intent-only execution remains a separate selection path.
 
 - Typical Scenario
 
@@ -990,3 +934,16 @@ Templates are limited to 200 entries. Extra fields and non-whitelisted response 
                     │ Query execution result details│
                     └──────────────────────────────┘
 ```
+
+## Internal frontend route inventory
+
+These routes use `/rest/v1/orchestrate`, not `/api/v1`. Browser sessions and permitted internal identity policies apply; AgentCard writes require admin permission.
+
+| Method | Relative path | Input/result |
+| --- | --- | --- |
+| GET | `/solution-packages` | List stored packages |
+| GET / DELETE | `/solution-packages/{pdf_filename}` | Get/remove one stored package; missing filename returns 404 |
+| PUT / DELETE | `/agent-cards/{organization}/{name}` | Admin-only registry proxy; PUT card name/organization must match URL |
+| GET | `/dispatch` | Required `intent` and `agent_name`; optional `lang`; returns SSE for one registered Agent |
+
+Encode each path component (spaces included); never concatenate untrusted names into URLs. There is no DELETE-all `/solution-packages` route. Sandbox routes are documented in section 8.

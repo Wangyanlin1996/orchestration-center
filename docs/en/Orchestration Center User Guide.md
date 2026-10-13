@@ -238,7 +238,7 @@ tail -f orchestrate.log
 cd {install_dir}/bin
    ./start_samples.sh
    ```
-## 2.5 Security Configuration
+## 2.3 Security Configuration
 
 The Orchestration Center supports multiple security configurations depending on your deployment scenario. Choose the appropriate level based on your environment.
 
@@ -292,7 +292,7 @@ persistence_mode=postgresql
 # SQL first boot uses the protected initial-admin secret described above.
 ```
 
-All services must present valid certificates signed by a trusted CA during TLS handshake. See the [Certificate Generation Guide](#) for cross-team certificate setup.
+All services must present valid certificates signed by a trusted CA during TLS handshake. See the [Certificate generation and SAN requirements](#generating-self-signed-certificates) for cross-team certificate setup.
 
 ### Security Configuration Summary
 
@@ -446,11 +446,11 @@ When executing a workflow, the system pushes execution progress in real time via
 
    If the backend is not accessible at the default address, click the gear icon in the lower-right corner of the login page (or the upper-right corner on the main interface) to configure the backend IP, port, and connection mode (Direct IP or Nginx Gateway).
 
-3. **View the Agent Library**
+4. **View the Agent Library**
 
    The left panel displays the full list of Agents. You can search and filter by Agent name or capability keywords. Click any Agent to view its detailed information in the right panel.
 
-4. **Create a New Workflow**
+5. **Create a New Workflow**
 
    - Click the `+` button at the top of the left panel
    - Select a creation method:
@@ -487,15 +487,15 @@ When executing a workflow, the system pushes execution progress in real time via
     Click the "Natural Language Orchestration" option, enter a natural language description in the pop-up input box, and click the "GENERATE" button.
     The generated PSOP workflow will be displayed in the current window. It is in "Edit" state by default and can be saved directly or modified before saving.
 
-5. **Save the Workflow**
+6. **Save the Workflow**
 
    After completing orchestration, the system either auto-saves or manually triggers a save operation. The returned `workflow_id` can be used for subsequent retrieval and execution.
 
-6. **View Existing Workflows**
+7. **View Existing Workflows**
 
    All PSOPs are displayed in the left panel. Use the search box at the top to quickly find them by name. Click any PSOP to view its detailed information in the right panel.
 
-7. **Execute a Workflow**
+8. **Execute a Workflow**
 - Enter the user intent in the top input box;
 - Click the "Retrieve Workflow" button on the right;
 - Once the system retrieves the corresponding PSOP, the left panel will display that PSOP;

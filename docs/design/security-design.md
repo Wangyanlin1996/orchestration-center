@@ -6,8 +6,11 @@ Contributed to the OpenAN project under the Apache License, Version 2.0.
 
 # Security Design Proposal — Registry Center and Orchestration Center
 
-**Status:** draft for discussion. Nothing in this document is implemented; the plan at the
-end is a proposal, not a description of current behavior.
+**Status:** historical proposal, anchored to the revisions below. All 'current/today' statements
+in this document refer to that historical baseline, not current deployments. Authentication,
+bootstrap and ownership controls have since changed; this proposal is not an implementation checklist.
+For the current supported behavior, use [transport runtime](../transport-runtime.md) and the
+[development guide](../en/Orchestration%20Center%20Development%20Guide.md).
 
 **Revision anchors** (every file:line reference below was read at these commits):
 

@@ -50,6 +50,7 @@ sequenceDiagram
     participant BE as Backend :5001<br/>(FastAPI)
     participant LLM as LLM
     participant Reg as Agent Registry
+    participant Host as Host Agent runtime
     participant Agt as A2A Agents
 
     rect rgb(240, 248, 255)
@@ -101,31 +102,20 @@ sequenceDiagram
         Note over User, Agt: 4. Execute Workflow
         User->>FE: Click Execute
         FE->>+BE: GET /rest/v1/orchestrate/execute<br/>?psop_id=xxx&user_intent=...&lang=zh
-        BE-->>FE: SSE: {"type":"init"}
-        BE-->>FE: SSE: {"type":"start"}
-        BE->>Reg: Fetch AgentCards for routing
+        BE->>Reg: Fetch AgentCards
         Reg-->>BE: AgentCard[]
-        loop Per step (DAG traversal)
-            BE->>BE: Build context from upstream outputs
-            BE-->>FE: SSE: {"type":"agent_request",...}
-            BE->>+Agt: A2A call (gRPC/HTTP)<br/>task + context
-            Agt-->>-BE: Agent response
-            BE-->>FE: SSE: {"type":"agent_response",...}
-            opt A2A-T Negotiation
-                BE->>Agt: Negotiation request
-                Agt-->>BE: Negotiation response
-                BE-->>FE: SSE: {"type":"negotiation_request",...}
-                BE-->>FE: SSE: {"type":"negotiation_resolved",...}
-            end
-            opt Conditional Routing
-                BE->>LLM: Route decision<br/>(JumpCondition matching)
-                LLM-->>BE: Next step selection
-            end
+        BE->>BE: Capture selected PSOP snapshot
+        BE->>Host: A2A-T intent + PSOP ID + snapshot
+        Note over Host: Validate snapshot; SDK schedules its DAG (no new search)
+        loop Workflow steps and tasks
+            Host->>Agt: A2A/A2A-T task or negotiation
+            Agt-->>Host: Results and status
+            Host-->>BE: TaskUpdate metadata.__sdk_event__
+            BE-->>FE: SSE data: SDK event
         end
-        BE-->>FE: SSE: {"type":"psop_update",...}
-        BE->>BE: Save ExecutionRecord
-        BE-->>FE: SSE: {"type":"complete",...}
-        BE-->>-FE: SSE: {"type":"close"}
+        BE->>BE: Store bounded event tail and final status
+        BE-->>FE: complete/error/cancelled or abnormal EOF
+        BE-->>-FE: Stream EOF (no guaranteed close event)
         FE-->>User: Execution finished
     end
 ```
@@ -140,9 +130,9 @@ sequenceDiagram
 | **Execution Engine** | `OrchestrationEngine` — thin A2A-T dispatch channel; PSOP workflow execution delegated to the Host Agent via workflow-engine SDK |
 | **Semantic Search** | Natural-language retrieval of previously built workflows |
 | **Dual API Layer** | Internal API (`/rest/v1/orchestrate/*`) for the frontend + External API (`/api/v1/*`) for third-party integration |
-| **SSE Streaming** | Real-time execution progress via 11 event types (init, start, agent_request, agent_response, psop_update, negotiation_request, negotiation_resolved, negotiation_failed, complete, error, close) |
+| **SSE Streaming** | Execution phases, SDK task/step/agent events and complete/error/cancelled results; see the API event contract |
 | **Pluggable Storage** | File-based JSON, PostgreSQL or MySQL persistence via HandlerRegistry |
-| **Template Marketplace** | Pre-built workflow templates for telecom scenarios (live broadcast, energy saving, fault handling) |
+| **Template Marketplace** | Bundled cross-city SPN diagnosis template; add reviewed templates under samples/workflow_templates/ |
 | **Sample Agents** | 3 sample A2A agents (Host Agent + two SPN domain agents) for testing and demonstration |
 
 MySQL setup, storage boundaries and container instructions: [MySQL persistence](docs/en/MySQL%20Persistence.md).
@@ -169,8 +159,11 @@ source .venv/bin/activate      # Linux
 # .venv\Scripts\activate       # Windows
 pip install -r requirements.txt
 
+# Provision configuration only if server.conf does not already exist.
+# Copy etc/conf/server.conf.example to etc/conf/server.conf; never overwrite local configuration.
+# Copy etc/config/models.yaml.example to etc/config/models.yaml, set model/url and supply named secrets in .env.
 # Configure the login account before startup, including local demos.
-python generate_access_password.py      # writes access_password into etc/conf/server.conf
+python generate_access_password.py      # prints a hash; copy it into access_password manually
 
 # Start backend (port 5001)
 python -m orchestrate.start
@@ -195,75 +188,40 @@ python -m samples.start_agents_server
 
 ## Docker Deployment
 
-Orchestration Center is one of three OpenAN components meant to run together
-(`orchestration-center`, [`registry-center`](https://github.com/hw-irc-sni/registry-center),
-[`prompt-registry`](https://github.com/hw-irc-sni/prompt-registry)), sharing
-the `openan-net` Docker network so agent cards resolve by container name.
+The root Compose files are a local deployment baseline, not an unattended production installer.
+Start the [registry center](https://github.com/project-openan/registry-center) on the shared
+`openan-net` network first, or configure a reachable `AGENT_REGISTRY_URL`.
 
-**One-time setup** (once for all three components, not per-repo):
-```bash
-docker network create openan-net
-```
+Before `docker compose up -d --build`:
 
-**Production** — `docker-compose.yml` only:
-```bash
-docker compose up -d --build
-```
-Talks to registry-center over HTTPS at `https://openan-registry-center:5000`
-(registry-center is HTTPS-by-default in production — see its README). Start
-registry-center's stack first, or this container will log connection errors
-until that hostname resolves and answers.
+1. Create `openan-net` if it does not exist: `docker network create openan-net`.
+2. Supply `ORCH_ACCESS_PASSWORD` (the hash printed by `generate_access_password.py`) through a
+   protected deployment environment. Never put a password/hash in an image or commit a real `.env`.
+3. Prepare `etc/config/models.yaml` and its named environment secrets; set `LLM_CONFIG_HOST_FILE`
+   if using a different host file. Configure the registry's independent access Token where required.
+4. Review every environment default, port binding and volume permission before exposing the stack.
 
-This also brings up `workflow-designer`, the containerized frontend: a
-multi-stage build (`npm run build`, served by nginx) exposed at
-`http://localhost:3003`. nginx reverse-proxies `/api/orchestrate/` to the
-`orchestration-center` service on the compose network (matching the
-`defaultGateway` the frontend's `src/service/api.js` defaults to), so the
-browser never needs a direct route to port 5001 -- keeping frontend and
-backend on the same origin, which the session cookie (see Authentication
-below) requires. Override the upstream with `BACKEND_HOST`/`BACKEND_PORT`
-env vars if you rename or repoint the backend service.
+The base Compose backend uses HTTP by default (`ORCH_ENABLE_HTTPS=false`), and its default registry
+URL is `http://openan-registry-center:5000`. These are explicit Compose overrides, not universal
+service defaults. The frontend is served at `http://localhost:3003` and proxies same-origin
+`/api/orchestrate/` requests; internal browser APIs use login sessions, public `/api/v1/*` uses Bearer.
 
-**Development** — layers `docker-compose-dev.yml` on top, which switches
-`AGENT_REGISTRY_URL` to plain HTTP to match registry-center's dev stack
-(HTTPS disabled there — see that repo's `docker-compose-dev.yml`), and also
-brings up a `sample-agents` service (the stub demo agents from
-`samples/agentcard/*.json`) so workflow execution has something to call:
+For HTTPS, prepare TLS/CA materials, matching SANs and client certificates when mTLS is enabled;
+configure backend, proxy, probe and outbound registry TLS separately. Skipping peer verification
+does not remove login or registry authentication. Follow the [transport contract](docs/transport-runtime.md)
+and [MySQL/container guide](docs/en/MySQL%20Persistence.md); the root file alone is not production acceptance.
+
+The development overlay starts sample agents:
+
 ```bash
 docker compose -f docker-compose.yml -f docker-compose-dev.yml up -d --build
 ```
-`sample-agents` runs the same image with `python3 -m samples.start_agents_server`
-and `SAMPLE_AGENTS_HOST=sample-agents`, which makes it advertise and register
-its cards under that Compose service name instead of the `127.0.0.1` baked
-into the JSON files (only correct when both processes share a host, which
-containers don't). It's dev-only and intentionally absent from
-`docker-compose.yml` — these are stub agents, not production backends.
 
-> Don't run this `sample-agents` container and a host-run
-> `python -m samples.start_agents_server` (`bin/start_samples.sh`) against the
-> same registry at the same time — each registers its own card URLs
-> (`sample-agents:PORT` vs `127.0.0.1:PORT`) and whichever started last wins,
-> silently breaking calls from the other.
-
-Negotiation-capable sample agents need a real chat model to do anything past
-startup. Give them a `chat` entry in `etc/config/models.yaml` (or point
-`LLM_CONFIG_HOST_FILE` at a shared one) and put the secret it names — such as
-`LLM_CHAT_API_KEY` — in the `.env` next to the compose file. Without both, the
-containers start green but negotiation fails.
-
-Every value in `environment:` reads from the host shell (or a `.env` file
-next to the compose file) first, falling back to the default shown in the
-file — e.g. `AGENT_REGISTRY_URL=https://a-different-host:5000 docker compose up -d`
-overrides it without editing the file.
-
-> Keep the two components on the same "track" — both production files
-> together, or both dev files together. Mixing a production
-> `registry-center` (HTTPS) with a dev `orchestration-center` pointed at
-> `http://` (or vice versa) will fail the TLS handshake.
-
-`prompt-registry` has no wiring to the other two today — join it to
-`openan-net` for future integration, but it can be started independently in
-any order.
+The overlay currently mounts a legacy model location. Explicitly set `LLM_CONFIG_HOST_FILE` to your
+prepared canonical YAML file so the host source is an existing file, not a newly created directory.
+Sample endpoints advertise `SAMPLE_AGENTS_HOST=sample-agents`; do not simultaneously register a
+host-run sample process against the same registry. Samples are demonstrations, not production agents.
+Successful container startup does not prove real model reachability or workflow execution.
 
 ## Architecture
 
@@ -338,6 +296,10 @@ flowchart TB
 | `POST` | `/retrieve-by-intent` | Retrieve workflow by intent |
 | `POST` | `/retrieve-topn-by-intent` | Retrieve top-N workflows by intent |
 | `GET` | `/agent-cards` | List available agent cards |
+| `GET` | `/solution-packages` / `/solution-packages/{pdf_filename}` | List/get a solution package |
+| `DELETE` | `/solution-packages/{pdf_filename}` | Remove one package, not all packages |
+| `PUT` / `DELETE` | `/agent-cards/{organization}/{name}` | Admin-only card proxy |
+| `GET` | `/dispatch` | intent + agent_name, optional lang; SSE |
 | `GET` | `/templates` | List workflow templates |
 | `POST` | `/templates/{id}/import` | Import workflow from template |
 | `GET` | `/execute` | Start workflow execution (SSE). Query params: `psop_id`, `user_intent`, `lang` |
@@ -353,6 +315,8 @@ flowchart TB
 | `PUT` | `/sandbox/templates/{workflow_id}` | Save sandbox stub templates |
 
 Full API specification: [API Reference](docs/en/Orchestration%20Center%20API%20Reference.md)
+
+Execute-by-ID forwards the selected PSOP ID and a detached snapshot to the Host Agent without another intent search. `user_intent` supplies execution context, not workflow selection. Later workflow edits apply to subsequent executions, not the captured snapshot. See API section 5.
 
 ### Host Agent Runtime
 
@@ -449,7 +413,7 @@ python generate_access_password.py
 | `ssl_certfile` | Server certificate path. |
 | `ssl_keyfile` | Server private key path (encrypted). |
 | `ssl_ca_certs` | CA trust store for verifying client certificates. |
-| `client_verify_server` | Verify remote server certs on outbound HTTPS calls (e.g., to registry center). Default `false` for backward compat. |
+| `client_verify_server` | Verify remote server certs on outbound HTTPS calls (e.g., to registry center). Default `true` in the public template and main-service factories. |
 
 Generate self-signed certificates (RSA 3072, compliant with cert validator):
 ```bash
@@ -605,7 +569,7 @@ The workflow engine does not initialize the retired A2A-T negotiation state mach
 | [User Guide](docs/en/Orchestration%20Center%20User%20Guide.md) | Features, scenarios, quick start, FAQ |
 | [API Reference](docs/en/Orchestration%20Center%20API%20Reference.md) | Full REST API specification |
 | [Developer Guide](docs/en/Orchestration%20Center%20Development%20Guide.md) | Custom handlers, LLM module, extension |
-| [GCP Deployment Guide](docs/en/Orchestration%20Center%20GCP%20Containerized%20Deployment%20Guide.md) | Docker + GCP Cloud Run deployment guide |
+| [GCP Deployment Guide](docs/en/Orchestration%20Center%20GCP%20Containerized%20Deployment%20Guide.md) | Historical GCP guide — current one-click entrypoint is unsupported |
 | [Frontend README](workflow-designer/README.md) | Workflow Designer setup and tech stack |
 | [LLM Config](etc/config/README_en.md) | LLM configuration reference |
 

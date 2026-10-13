@@ -30,6 +30,7 @@ sequenceDiagram
     participant BE as 后端 :5001<br/>(FastAPI)
     participant LLM as 大模型
     participant Reg as 注册中心
+    participant Host as Host Agent 执行宿主
     participant Agt as Agent 服务
 
     rect rgb(240, 248, 255)
@@ -72,7 +73,7 @@ sequenceDiagram
         User->>FE: 点击保存
         FE->>+BE: POST /rest/v1/orchestrate/workflows<br/>{psop: {...}}
         BE->>BE: 校验 PSOP (Pydantic)
-        BE->>BE: 持久化 (File JSON / PostgreSQL)
+        BE->>BE: 持久化 (File JSON / PostgreSQL / MySQL)
         BE-->>-FE: {workflow_id: "..."}
         FE-->>User: 保存成功
     end
@@ -81,36 +82,26 @@ sequenceDiagram
         Note over User, Agt: 4. 执行工作流
         User->>FE: 点击执行
         FE->>+BE: GET /rest/v1/orchestrate/execute<br/>?psop_id=xxx&user_intent=...&lang=zh
-        BE-->>FE: SSE: {"type":"init"}
-        BE-->>FE: SSE: {"type":"start"}
         BE->>Reg: 获取 AgentCard 列表
         Reg-->>BE: AgentCard[]
-        loop 逐步骤执行（DAG 遍历）
-            BE->>BE: 构建上游上下文 (context_from)
-            BE-->>FE: SSE: {"type":"agent_request",...}
-            BE->>+Agt: A2A 调用 (gRPC/HTTP)<br/>task + context
-            Agt-->>-BE: Agent 响应
-            BE-->>FE: SSE: {"type":"agent_response",...}
-            opt A2A-T 协商
-                BE->>Agt: 协商请求
-                Agt-->>BE: 协商响应
-                BE-->>FE: SSE: {"type":"negotiation_request",...}
-                BE-->>FE: SSE: {"type":"negotiation_resolved",...}
-            end
-            opt 条件路由
-                BE->>LLM: 路由决策<br/>(JumpCondition 匹配)
-                LLM-->>BE: 下一步选择
-            end
+        BE->>BE: 捕获所选 PSOP 快照
+        BE->>Host: A2A-T 下发意图、PSOP ID 与快照
+        Note over Host: 校验快照、创建 ControlPoint、驱动 SDK DAG，不重新检索
+        loop SDK 步骤与任务
+            Host->>Agt: A2A/A2A-T 调用
+            Agt-->>Host: 任务状态/协商结果
+            Host-->>BE: TaskUpdate metadata.__sdk_event__
+            BE-->>FE: SSE data: SDK 事件
         end
-        BE-->>FE: SSE: {"type":"psop_update",...}
-        BE->>BE: 保存执行记录
-        BE-->>FE: SSE: {"type":"complete",...}
-        BE-->>-FE: SSE: {"type":"close"}
+        BE->>BE: 保存有界事件与执行状态
+        BE-->>FE: complete/error/cancelled 或异常 EOF
+        BE-->>-FE: 传输结束（不保证 close 事件）
+
         FE-->>User: 执行完成
     end
 ```
 
-**数据流方向**: 用户意图/PreFlow → PSOP生成 → 存储 → OrchestrationEngine (A2A-T 下发) → 工作台智能体执行 → A2A Agent并行调用 → SSE事件回传 → 执行记录存储
+**数据流方向**: 用户意图/PreFlow → PSOP生成 → 存储 → OrchestrationEngine (A2A-T 下发) → Host Agent（执行宿主）执行 → A2A Agent并行调用 → SSE事件回传 → 执行记录存储
 
 ---
 
@@ -146,11 +137,13 @@ ExecutionRecord (执行记录)
 - **Layer 0**: 执行层（叶子Agent），仅依据自身任务描述执行，无上游上下文依赖
 - **Layer >= 1**: 聚合层，通过 `context_from` 指定依赖的前驱步骤，接收上游步骤的输出作为上下文中做综合分析
 - `context_from: ["*"]` 表示接收所有前驱（含间接）的输出
-- 工作台智能体在执行时递归收集前驱输出，粗估截断至 ~6000 tokens
+- Host Agent（执行宿主）在执行时递归收集前驱输出，粗估截断至 ~6000 tokens
 
 ---
 
 ## 3. 执行引擎设计
+
+按 ID 执行的身份绑定：接口加载所选 PSOP，转发层捕获独立快照，不再进行意图检索；`user_intent` 只作为运行上下文。Host Agent 优先使用快照，并校验它与显式 ID 一致；显式元数据无效时失败，不降级检索其他工作流。未携带快照、只携带 ID 时精确加载并核对返回 ID；两者均未提供才按意图查找。图状态更新只修改执行内副本，不修改持久化/检索层对象。运行期间对存储工作流的编辑不改变已捕获快照，也不表示提供数据库版本锁。
 
 ### 3.1 三层架构
 
@@ -161,7 +154,7 @@ Frontend (React :3003)
 OrchestrationEngine (编排中心, 薄 A2A-T 分发通道)
     │  workflow-engine stream_message
     ▼
-Workbench Agent (工作台智能体, Leader, 集成 workflow-engine SDK)
+Workbench Agent (Host Agent（执行宿主）, Leader, 集成 workflow-engine SDK)
     │  A2A Protocol + A2A-T Negotiation
     ▼
 Worker Agents (SPN / 其他业务域 Agent)
@@ -169,20 +162,20 @@ Worker Agents (SPN / 其他业务域 Agent)
 
 编排中心**不直接执行工作流**。`OrchestrationEngine` 是一个薄的 A2A-T 分发通道，职责为：
 
-1. 接收前端传入的用户意图
-2. 通过 A2A-T 协议将意图下发给工作台智能体（Workbench Agent）
+1. 接收用户意图；指定 ID 时捕获所选 PSOP 的独立快照，按意图执行时先完成选择
+2. 通过 A2A-T 协议将意图、选定 PSOP ID 与快照下发给 Host Agent（执行宿主）
 3. 流式接收工作台返回的 SDK 事件（从 TaskUpdate metadata 中提取 `__sdk_event__`）
 4. 将事件转发为前端 SSE 流
 
-### 3.2 工作台智能体（Workbench Agent）
+### 3.2 Host Agent（执行宿主）（Workbench Agent）
 
-工作台智能体是工作流执行的宿主，集成 `workflow-engine` SDK，对标 Java 端的 `TransportWorkbenchAgentExecutor` + `WorkbenchOrchestrator`。
+Host Agent（执行宿主）是工作流执行的宿主，集成 `workflow-engine` SDK，对标 Java 端的 `TransportWorkbenchAgentExecutor` + `WorkbenchOrchestrator`。
 
 执行流程：
 
 ```text
-1. 接收意图 → LLM 理解/改写（可选）
-2. PSOP 检索 → 调编排中心 API 获取匹配的工作流
+1. 接收意图与可选 PSOP 元数据
+2. 优先校验并使用快照；只有 ID 时按 ID 加载并校验；二者均未提供时才按意图检索
 3. 加载 Agent Cards → 调注册中心获取可用 Agent 列表
 4. 创建 ControlPoint → on_task / on_self_task / on_route / on_negotiation
 5. execute_psop → workflow-engine SDK 驱动 DAG 遍历
@@ -197,48 +190,27 @@ Authorization-T 一次性操作与 Notification-T 长连接由宿主进程级独
 
 ### 3.3 SSE 事件转发机制
 
-工作台智能体将每个 SDK 事件编码为 A2A-T `TaskStatusUpdateEvent`，原始事件 JSON 保留在 `metadata["__sdk_event__"]` 中。编排中心的 `OrchestrationEngine` 从流式响应中提取该字段，原样转发给前端。
+Host Agent（执行宿主）将每个 SDK 事件编码为 A2A-T `TaskStatusUpdateEvent`，原始事件 JSON 保留在 `metadata["__sdk_event__"]` 中。编排中心的 `OrchestrationEngine` 从流式响应中提取该字段，原样转发给前端。
 
-前端视角仍为 11 种事件类型（init、start、agent_request、agent_response、psop_update、negotiation_request、negotiation_resolved、negotiation_failed、complete、error、close），但事件产生方已从编排中心迁移至工作台智能体的 workflow-engine SDK。
+转发 SDK 事件的开放集合，另有搜索/加载/下发阶段的 start 与工作流快照 psop_update。执行结果是 complete/error/cancelled；没有中心生成的 init，也不保证 close 帧。消费者必须处理未知类型、心跳、取消与没有终态的异常 EOF。完整字段契约见双语 API 参考。
 
 ### 3.4 A2A-T 协商支持
 
-协商逻辑由工作台智能体的 `WorkbenchControlPoint` 驱动，通过 workflow-engine SDK 的 `ControlPoint` 接口实现 `on_negotiation` 回调。只有携带有效 Negotiation-T 内容的 `INPUT_REQUIRED` 才进入协商；缺少处理器、内容无效或本地终止时任务失败，引擎会对已知远端活动任务做尽力取消，不会静默降级为普通 A2A 成功。
+协商逻辑由Host Agent（执行宿主）的 `WorkbenchControlPoint` 驱动，通过 workflow-engine SDK 的 `ControlPoint` 接口实现 `on_negotiation` 回调。只有携带有效 Negotiation-T 内容的 `INPUT_REQUIRED` 才进入协商；缺少处理器、内容无效或本地终止时任务失败，引擎会对已知远端活动任务做尽力取消，不会静默降级为普通 A2A 成功。
 
 ---
 
 ## 4. 存储层设计
 
-### 4.1 双模存储架构
+### 4.1 可扩展存储架构
 
-```text
-                   HandlerRegistry
-                   ┌─────────────┐
-                   │ _registry   │ (class dict)
-                   │ get_handler │──── 根据 InterfaceType + persistence_mode 分发
-                   └──────┬──────┘
-          ┌───────────────┼───────────────┐
-      file mode       postgresql mode
-  ┌──────┴──────┐  ┌───────┴──────────┐
-  │BaseHandler  │  │Custom*Handler    │
-  │ 子类8个     │  │ 子类8个          │
-  │→WorkflowStorage│→psop_processor   │
-  │  (文件JSON) │  │  execution_rec.. │
-  └─────────────┘  └──────────────────┘
-```
+`persistence_mode` 选择 file、postgresql 或 mysql。`HandlerRegistry` 按操作和后端分发；SQL 连接由实例级数据库上下文及连接池管理，不是每次请求直接建连接。新增后端需实现并注册操作处理器、连接 profile、驱动与迁移，并验证操作覆盖，不能只新增一个模式字符串。
 
-- `persistence_mode=file`（默认）：`WorkflowStorage` 以 JSON 文件存储，使用原子写入（`tempfile + os.replace`）防止文件损坏
-- `persistence_mode=postgresql`：经 `HandlerRegistry` 分发到 DB handler，通过 `psycopg2` 直连 PostgreSQL
-- 非 file 模式且未注册 handler → 抛出 `ValueError`
+file 使用 WorkflowStorage 与原子 JSON 写入；SQL 保存 PSOP 与执行记录。PreFlow/方案包仍使用文件资源，不能因为选择 SQL 就推断所有资源都进入数据库。连接配置与密码引用见 [数据库配置](database-configuration.md)。
 
-### 4.2 操作分发
+### 4.2 启动与失败边界
 
-| 操作 | File 模式 | PostgreSQL 模式 |
-|------|-----------|----------------|
-| 列出/获取 PSOP | `WorkflowStorage` 直接 | `HandlerRegistry` → DB handler |
-| 保存/删除 PSOP | `HandlerRegistry` → file handler | `HandlerRegistry` → DB handler |
-| 执行记录 CRUD | `HandlerRegistry` | `HandlerRegistry` |
-| PreFlow | `WorkflowStorage` 直接 | 仅 file |
+在绑定端口前验证所选 profile、驱动及存储就绪；失败拒绝启动，不静默切换到 file。数据库上下文在服务关闭时清理，实例间不共享全局连接配置。环境覆盖在内存中生效，不改写私有配置文件。
 
 ### 4.3 数据库表结构
 
@@ -288,6 +260,15 @@ Authorization-T 一次性操作与 Notification-T 长连接由宿主进程级独
 | GET | `/execution-records` | 列出执行记录 |
 | GET | `/execution-records/{id}` | 获取单条执行记录 |
 | DELETE | `/execution-records/{id}` | 删除执行记录 |
+| GET | `/solution-packages` / `/solution-packages/{pdf_filename}` | 方案包列表/详情 |
+| DELETE | `/solution-packages/{pdf_filename}` | 删除指定方案包 |
+| PUT / DELETE | `/agent-cards/{organization}/{name}` | 管理员代理写入/删除卡片 |
+| GET | `/dispatch` | intent + agent_name 单 Agent SSE |
+| POST | `/sandbox/{workflow_id}/run` | 沙箱验证/模板，契约见 API 第 8 节 |
+| GET | `/sandbox/verifications` | 沙箱验证/模板，契约见 API 第 8 节 |
+| GET / DELETE | `/sandbox/verifications/{verification_id}` | 沙箱验证/模板，契约见 API 第 8 节 |
+| GET | `/sandbox/verifications/{verification_id}/events` | 沙箱验证/模板，契约见 API 第 8 节 |
+| GET / PUT | `/sandbox/templates/{workflow_id}` | 沙箱验证/模板，契约见 API 第 8 节 |
 
 ### 5.2 外部 API (`/api/v1`)
 
@@ -373,8 +354,8 @@ PDF上传 → 解析章节 → PSOP生成 → 预览 → 可进入编辑
 
 ```text
 etc/conf/server.conf       (基础配置, key=value 行)
-etc/conf/server.properties (覆盖配置, 更高优先级, 持久化用户设置)
-etc/conf/db/postgresql.json    (PostgreSQL 连接)
+etc/conf/server.properties (业务策略/运行参数；重复键后加载覆盖，应避免重复)
+etc/conf/db/postgresql.json / mysql.json    (所选 SQL 连接 profile；模板为 *.json.template)
 etc/config/models.yaml  (LLM 模型定义；已 gitignore，复制 models.yaml.example)
 .env                       (LLM 密钥；由 api_key_env / auth.*_env 按名引用)
 ```
@@ -383,11 +364,11 @@ etc/config/models.yaml  (LLM 模型定义；已 gitignore，复制 models.yaml.e
 
 | Key | 说明 | 默认值                     |
 |-----|------|-------------------------|
-| `persistence_mode` | 存储模式: `file` 或 `postgresql` | `file`                  |
+| `persistence_mode` | 存储模式: `file`、`postgresql` 或 `mysql` | `file`                  |
 | `ip` / `port` | 绑定的 IP 和端口 | `127.0.0.1` / `5001`   |
-| `agent_registry_url` | Agent 注册中心地址 | `https://127.0.0.1:5000` |
-| `enable_https` | 是否启用 HTTPS | `false`                 |
-| `forwarded_allow_ips` | 反向代理信任的 IP | `"127.0.0.1"`           |
+| `agent_registry_url` | Agent 注册中心地址 | `http://127.0.0.1:5000` |
+| `enable_https` | 是否启用 HTTPS | 公开模板 false；缺键时代码回退 true，必须显式配置 |
+| `forwarded_allow_ips` | 反向代理信任的 IP | `127.0.0.1`（不加引号）           |
 
 ### 7.3 设计要点
 
@@ -395,17 +376,17 @@ etc/config/models.yaml  (LLM 模型定义；已 gitignore，复制 models.yaml.e
 - 所有 key 自动小写化，值均为字符串（使用时需类型转换）
 - `#` 开头的行作为注释忽略
 - `server.properties` 中的 key 会覆盖 `server.conf`
-- DB 配置采用 lazy init：`_ensure_conn_info()` 延迟到首次数据库调用时加载
+- 所选数据库在启动前校验；支持的显式环境别名最终覆盖文件值，未定义变量不应被当作任意配置键。
 
 ---
 
 ## 8. 关键设计决策
 
-1. **分层上下文传播**（`layer` + `context_from`）——Layer 0 步骤独立执行，Layer >= 1 步骤通过 `context_from` 声明依赖的前驱步骤，工作台智能体自动收集上游输出注入为上下文。`context_from: ["*"]` 表示接收所有前驱（含间接）输出。
-2. **插件式存储**（`HandlerRegistry`）——通过 `InterfaceType` 枚举 + `persistence_mode` 配置分发操作到 file 或 PostgreSQL handler，新增存储后端实现 handler 接口并注册即可。
+1. **分层上下文传播**（`layer` + `context_from`）——Layer 0 步骤独立执行，Layer >= 1 步骤通过 `context_from` 声明依赖的前驱步骤，Host Agent（执行宿主）自动收集上游输出注入为上下文。`context_from: ["*"]` 表示接收所有前驱（含间接）输出。
+2. **插件式存储**（`HandlerRegistry`）——通过 `InterfaceType` 枚举 + `persistence_mode` 配置分发操作到 file、PostgreSQL 或 MySQL handler，新增存储后端实现 handler 接口并注册即可。
 3. **PSOP DAG 模型**——`Step` 包含 `subtasks`（并行任务列表）、`type`（`ALL_SUCCESS` / `ANY_SUCCESS` 执行模式）、`next`（条件跳转列表）。`JumpCondition` 支持声明式转发和 LLM 动态路由两种方式。
-4. **SSE 流式推送**——工作台智能体通过 workflow-engine SDK 产出事件，编码为 A2A-T TaskUpdate metadata；OrchestrationEngine 从流式响应中提取 `__sdk_event__` 并 yield 为 `text/event-stream`。执行记录保存完整 `events` 数组，支持事后回放。
+4. **SSE 流式推送**——Host Agent（执行宿主）通过 workflow-engine SDK 产出事件，编码为 A2A-T TaskUpdate metadata；OrchestrationEngine 从流式响应中提取 `__sdk_event__` 并 yield 为 `text/event-stream`。执行记录仅保留最多 1000 条事件尾部，超限在 events 数组前增加 events_truncated 标记事件与丢弃数量；execution_history 可能为空，不能保证完整回放。
 5. **Prompt 工程**——PSOP 生成、意图检索、LLM 路由决策均使用结构化 JSON schema 约束输出格式，配合 few-shot 示例减少自由格式偏差。
 6. **原子写入**——文件持久化使用 `tempfile.mkstemp` + `os.replace` 确保写入过程不产生半写文件。
-7. **全链路 async**——Subtask 在工作台智能体中通过 `asyncio.gather` / `asyncio.as_completed` 并行执行，LLM 调用通过 `run_in_executor` 包装避免阻塞事件循环。
+7. **全链路 async**——Subtask 在Host Agent（执行宿主）中通过 `asyncio.gather` / `asyncio.as_completed` 并行执行，LLM 调用通过 `run_in_executor` 包装避免阻塞事件循环。
 8. **多层防护**——每个 API 端点配置 `anyio.Semaphore` 并发上限 + `RateLimiter` 按 IP 速率限制。
