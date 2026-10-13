@@ -28,7 +28,7 @@ SPDX-License-Identifier: Apache-2.0
   - **SOP Orchestration**: Upload PDF/TXT/MD files or submit natural language SOP steps to automatically generate a PSOP workflow.
   - **Intent Orchestration**: Submit natural language task intent and let the LLM autonomously plan and generate a PSOP workflow.
   - **Search Workflow**: Submit natural language intent to match existing workflows in the platform, returning the most relevant TopN workflows (including ID, name, description, etc.).
-  - **Auto-Orchestration + Execution**: Submit a task description to automatically search for matching workflows and execute them; if no match is found, generate a new workflow and then execute it, with real-time progress and results pushed via SSE.
+  - **Search and Execute by Intent**: Submit a task description to select an existing workflow and execute it via SSE. No match does not trigger generation; the default Host reports an SSE `error`.
   - **Execute Specific Workflow**: Start execution based on a known PSOP ID, with real-time execution progress and results pushed via SSE.
   - **Query Execution Result**: Get detailed information about a workflow execution record by execution ID.
 
@@ -534,15 +534,15 @@ if not terminal:
     raise RuntimeError("Execution stream ended without a terminal outcome")
 ```
 
-## 4. Auto-Orchestration + Execution Interface
+## 4. Search and Execute by Intent Interface
 
 - Typical Scenario
 
-    A user directly submits a task requirement, and the system automatically determines whether a matching existing workflow exists: if yes, execute it directly; if no, generate one first and then execute. Suitable for "one-sentence-driven" end-to-end task scenarios.
+    The workflow library already contains usable workflows, and the caller supplies only a task description for automatic selection and execution. To review the selection first, search and then execute by ID.
 
 - Description
 
-    Accepts task description text, first performs LLM-based search for matching existing PSOP workflows. If a match is found, directly execute it via SSE stream; if no match is found, automatically invoke intent orchestration to generate a new PSOP, save it, and then execute it immediately. The entire process pushes real-time execution progress via SSE (Server-Sent Events).
+    Searches existing PSOPs and dispatches the selected ID and snapshot to the Host Agent. This endpoint does not generate or save a new workflow. When the center finds no match, it still dispatches the raw intent; if the default Host's search also returns no result, it reports `No matching workflow found` through SSE `error` and records failure, not successful `complete`. For a new workflow, call `POST /api/v1/orchestrate/intent` to generate and save it first; on success read `data.id` and call `GET /api/v1/orchestrate/execute/{psop_id}`. Do not unconditionally retry the execution endpoint after a no-match error.
 
 - Interface Constraints
 
@@ -564,8 +564,8 @@ if not terminal:
 
     | Parameter | Required | Type   | Range | Default | Description                                                         |
     |-----------|----------|--------|-------|---------|---------------------------------------------------------------------|
-    | task      | Yes      | string | -     | -       | Task description. System searches existing PSOP first; auto-generates if no match |
-    | name      | No       | string | -     | -       | Optional workflow name (used in auto-generation scenario)            |
+    | task      | Yes      | string | 1–10000 characters | - | Task description to select an existing workflow; does not trigger generation |
+    | name      | No       | string | At most 256 characters | - | Deprecated compatibility input; accepted but ignored. Name new workflows through the intent orchestration endpoint |
 
 - Request Example
 
@@ -576,8 +576,7 @@ if not terminal:
     Authorization: Bearer <account-token>
 
     {
-        "task": "Help me perform a network fault root cause analysis",
-        "name": "Fault Root Cause Analysis"
+        "task": "Help me perform a network fault root cause analysis"
     }
     ```
 
@@ -589,10 +588,11 @@ if not terminal:
 
     | Status Code | Description                              |
     |-------------|------------------------------------------|
-    | 500         | Auto-generation of PSOP failed           |
+    | 422         | Invalid request body or fields           |
+    | 500         | Service failure before the stream starts |
     | 503         | Concurrency limit reached, server busy   |
 
-    > Runtime errors during execution are pushed via SSE `error` events and will not be reflected in the HTTP status code.
+    > Authentication, rate limits or dependencies can fail with their HTTP status before the stream starts. Once streaming starts, no-match/execution failures use SSE `error`; HTTP 200 is not execution success. The error payload is `{"type":"error","data":{"error":"No matching workflow found"}}` (other event fields omitted).
 
 ---
 
@@ -638,7 +638,7 @@ if not terminal:
 
 - Response Format (SSE Event Stream)
 
-    Same SSE event format as the [Auto-Orchestration + Execution Interface](#4-auto-orchestration--execution-interface).
+    Same SSE event format as the [Search and Execute by Intent Interface](#4-search-and-execute-by-intent-interface).
 
 - Error Codes
 
@@ -898,42 +898,25 @@ Templates are limited to 200 entries. Extra fields and non-whitelisted response 
 ### Typical Calling Flow
 
 ```
-                        ┌─────────────────────────┐
-                        │ POST /orchestrate/search │  ← Search workflows
-                        │ { intent: "...", top_n } │
-                        └──────────┬──────────────┘
-                                   │ Returns TopN summary list
-                                   ▼
-                    ┌──────────────────────────────┐
-                    │ Caller selects target ID      │
-                    └──────────────┬───────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              │ Match found        │                     │ No match
-              ▼                    │                     ▼
-   ┌──────────────────────┐       │          ┌─────────────────────┐
-   │ GET /orchestrate/    │       │          │ POST /orchestrate/   │
-   │   execute/{id}       │       │          │   intent             │
-   │ SSE execute specific │       │          │ Intent orchestration  │
-   │     workflow         │       │          │   → save → return    │
-   └──────────┬───────────┘       │          └──────────┬──────────┘
-              │                   │                     │
-              └───────────────────┼─────────────────────┘
-                                  │ Or directly via one-stop:
-                                  ▼
-                    ┌──────────────────────────────┐
-                    │ POST /orchestrate/execute     │
-                    │ Auto-search + execute /       │
-                    │ generate + execute             │
-                    │ (SSE real-time push)          │
-                    └──────────┬───────────────────┘
-                               │
-                               ▼
-                    ┌──────────────────────────────┐
-                    │ GET /executions/{id}          │
-                    │ Query execution result details│
-                    └──────────────────────────────┘
+POST /api/v1/orchestrate/search  →  Caller reviews TopN results
+                 │
+         ┌───────┴──────────────────────┐
+         │ Select existing workflow     │ No usable workflow
+         │                              ▼
+         │             POST /api/v1/orchestrate/intent
+         │             Generate and save; read successful data.id
+         └────────────────┬─────────────┘
+                          ▼
+GET /api/v1/orchestrate/execute/{psop_id}  →  SSE execution of selected workflow
+                          │
+                          ▼
+GET /api/v1/executions  →  Obtain execution_id from the records list
+                          │
+                          ▼
+GET /api/v1/executions/{execution_id}  →  Retrieve execution details
 ```
+
+If automatic selection of an existing workflow is acceptable, call `POST /api/v1/orchestrate/execute` with only `task`. It is not a combined generation/execution endpoint; handle a no-match SSE error as described in section 4. Generation and execution have separate quotas, authentication and model requirements; successful generation does not guarantee successful execution.
 
 ## Internal frontend route inventory
 

@@ -162,6 +162,56 @@ async def test_intent_without_match_keeps_raw_dispatch(relay):
 
 
 @pytest.mark.asyncio
+async def test_intent_without_match_returns_real_host_failure(relay, monkeypatch):
+    """Raw dispatch is not generation: the actual default Host must report failure."""
+    from a2a.types import TaskState
+    from host_agent.config import HostAgentConfig
+    from host_agent.execution import HostExecutionTracker
+    from host_agent.workflow_repository import OrchestrationWorkflowRepository
+
+    search = AsyncMock(return_value=[])
+    monkeypatch.setattr("host_agent.workflow_repository.search_psop", search)
+    executor = HostAgentExecutor.__new__(HostAgentExecutor)
+    executor._execution_tracker = HostExecutionTracker()
+    executor._config = HostAgentConfig(orchestration_url="https://orch.test", registry_url="https://registry.test")
+    executor._workflow_repository = OrchestrationWorkflowRepository(orch_url="https://orch.test")
+    executor._load_agent_cards = AsyncMock()
+    relay.retrieval.retrieve_psop_by_intent_topn.return_value = []
+
+    class HostBridge:
+        async def stream_message(self, agent_name, content):
+            updates = []
+
+            async def enqueue(event):
+                updates.append(event)
+
+            context = SimpleNamespace(task_id="no-match-task", context_id="no-match-context",
+                                      metadata=dict(content.metadata), message=None,
+                                      get_user_input=lambda: content.parts[0].text)
+            await executor.execute(context, SimpleNamespace(enqueue_event=enqueue))
+            for update in updates:
+                yield A2AStreamEvent(event_type="status_update", task_id=context.task_id,
+                                     context_id=context.context_id,
+                                     task_state=TaskState.Name(update.status.state), metadata=dict(update.metadata))
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(OrchestrationEngine, "_get_engine_client", lambda self: HostBridge())
+    response = await external_api.execute_workflow(
+        MagicMock(), external_api.ExecuteRequest(task="new intent"), lang="en",
+    )
+    events = await collect(response)
+    assert response.status_code == 200
+    assert events[-1]["type"] == "error"
+    assert "No matching workflow found" in events[-1]["data"]["error"]
+    assert not any(event["type"] == "complete" for event in events)
+    assert relay.records[0].status.value == "failed"
+    search.assert_awaited_once()
+    executor._load_agent_cards.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("identifier", [None, "", " ", 42])
 async def test_host_rejects_explicit_empty_id_without_fallback(identifier):
     executor = HostAgentExecutor.__new__(HostAgentExecutor)

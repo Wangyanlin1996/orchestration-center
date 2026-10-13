@@ -35,7 +35,7 @@ The following REST API endpoints are exposed externally:
 
 - **SOP Orchestration API**: Generate PSOP workflows based on natural language SOP text or PDF/TXT/MD files.
 - **Intent Orchestration API**: Automatically plan and generate executable PSOP workflows based on natural language intent descriptions.
-- **Auto Orchestration Execution API**: Automatically retrieve or generate a PSOP based on a task description and execute it, returning SSE streaming execution progress.
+- **Search and Execute by Intent API**: Select an existing PSOP by task description and execute it via SSE. The default Host reports SSE `error` on no match; this endpoint does not generate workflows. Generate and save a new workflow through the intent orchestration API first, then execute its returned ID.
 - **Specified PSOP Execution API**: Execute a known workflow by PSOP ID, returning SSE streaming execution progress.
 - **Agent List Query API**: Retrieve all available Agents in the system and their skill information.
 - **Execution Result Query API**: Query the execution result of a workflow by execution ID.

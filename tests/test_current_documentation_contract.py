@@ -9,6 +9,30 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("relative, marker", [
+    ("docs/en/Orchestration Center API Reference.md", "does not generate"),
+    ("docs/zh/编排中心API参考.md", "不会自动生成"),
+])
+def test_intent_execution_documents_no_match_failure_not_automatic_generation(relative, marker):
+    text = (ROOT / relative).read_text(encoding="utf-8")
+    assert marker in text
+    assert "No matching workflow found" in text
+    assert "auto-generates if no match" not in text
+    assert "无匹配则自动生成" not in text
+
+
+def test_execute_request_schema_does_not_promise_generation_or_effective_name():
+    from orchestrate.server.external_api import ExecuteRequest, execute_workflow
+
+    import inspect
+
+    schema = ExecuteRequest.model_json_schema()["properties"]
+    assert "does not generate" in schema["task"]["description"]
+    assert schema["name"]["deprecated"] is True
+    assert "ignored" in schema["name"]["description"]
+    assert "auto-generate" not in inspect.getdoc(execute_workflow)
+
+
 @pytest.mark.parametrize("relative", [
     "docs/en/Orchestration Center User Guide.md", "docs/zh/用户指南.md",
     "docs/en/Orchestration Center Development Guide.md", "docs/zh/开发指南.md",
