@@ -3,10 +3,33 @@
 # SPDX-License-Identifier: Apache-2.0
 """Public onboarding must agree with the enforced account/bootstrap contract."""
 from pathlib import Path
+import re
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("relative", ["README.md", "README_zh.md", "docs/DESIGN.md"])
+def test_sequence_diagram_notes_escape_semicolon_statement_separators(relative):
+    """A raw ASCII semicolon ends a Mermaid statement, even inside a Note.
+
+    Mermaid entity codes (for example #59;) preserve literal punctuation.
+    This narrowly guards the published sequence-note contract; it is not a
+    substitute for parsing whole diagrams with Mermaid when editing them.
+    """
+    text = (ROOT / relative).read_text(encoding="utf-8")
+    diagrams = re.findall(r"^```mermaid\s*\n(.*?)^```", text, re.MULTILINE | re.DOTALL)
+    assert diagrams, f"No Mermaid diagrams in {relative}"
+    for diagram in diagrams:
+        if not diagram.lstrip().startswith("sequenceDiagram"):
+            continue
+        for line in diagram.splitlines():
+            if not re.match(r"\s*Note\s", line, re.IGNORECASE):
+                continue
+            message = line.split(":", 1)[1]
+            without_entities = re.sub(r"#(?:\d+|[A-Za-z][A-Za-z0-9]*);", "", message)
+            assert ";" not in without_entities, f"{relative}: escape a literal semicolon with #59;: {line}"
 
 
 @pytest.mark.parametrize("relative, marker", [
