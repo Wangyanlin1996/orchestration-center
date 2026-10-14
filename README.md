@@ -106,7 +106,7 @@ sequenceDiagram
         Reg-->>BE: AgentCard[]
         BE->>BE: Capture selected PSOP snapshot
         BE->>Host: A2A-T intent + PSOP ID + snapshot
-        Note over Host: Validate snapshot; SDK schedules its DAG (no new search)
+        Note over Host: Validate snapshot#59; SDK schedules its DAG (no new search)
         loop Workflow steps and tasks
             Host->>Agt: A2A/A2A-T task or negotiation
             Agt-->>Host: Results and status

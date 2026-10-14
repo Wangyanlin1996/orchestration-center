@@ -2,11 +2,117 @@
 # All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 """Public onboarding must agree with the enforced account/bootstrap contract."""
+import os
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Directories that never hold shipped documentation; used only by the git-less fallback.
+_SKIP_DIRECTORIES = {"node_modules", ".venv", ".git", "data", ".pytest-tmp", ".pytest_cache",
+                     "__pycache__", "dist", "build", "reviews"}
+_MERMAID_FENCE = re.compile(r"^mermaid$", re.IGNORECASE)
+_NEAR_MISS_FENCE = re.compile(r"^mermaid\S*", re.IGNORECASE)
+_ENTITY_CODE = re.compile(r"#(?:\d+|[A-Za-z][A-Za-z0-9]*);")
+
+
+def _repository_markdown():
+    """Documentation that ships or is about to ship: tracked Markdown plus untracked,
+    non-ignored Markdown. Gitignored local notes (reviews/, data/) never reach GitHub,
+    so they must not fail this contract. Without a usable git, prune-walk instead.
+    """
+    try:
+        tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--", "*.md"],
+                                 capture_output=True, check=False)
+        pending = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--others",
+                                  "--exclude-standard", "--", "*.md"], capture_output=True, check=False)
+    except OSError:
+        tracked = pending = None
+    if tracked is not None and tracked.returncode == 0:
+        payload = tracked.stdout + (pending.stdout if pending.returncode == 0 else b"")
+        return sorted(name for name in payload.decode("utf-8", "replace").split("\0") if name)
+    documents = []
+    for directory, subdirectories, filenames in os.walk(ROOT, onerror=lambda _error: None):
+        subdirectories[:] = [name for name in subdirectories if name not in _SKIP_DIRECTORIES]
+        documents += [Path(directory, name).relative_to(ROOT).as_posix()
+                      for name in filenames if name.endswith(".md")]
+    return sorted(documents)
+
+
+def _fenced_blocks(text):
+    """Yield ``(info_string, body_lines, line_of_first_body_line)`` per code fence."""
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        opening = re.match(r"^(?P<fence>`{3,}|~{3,})(?P<info>.*)$", lines[index])
+        if opening is None:
+            index += 1
+            continue
+        fence, info = opening.group("fence"), opening.group("info").strip()
+        closing = re.compile(r"^" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*$")
+        index += 1
+        start = index
+        while index < len(lines) and not closing.match(lines[index]):
+            index += 1
+        yield info, lines[start:index], start + 1
+        index += 1
+
+
+MARKDOWN = _repository_markdown()
+
+
+def test_markdown_inventory_is_discoverable():
+    assert len(MARKDOWN) > 5, f"documentation inventory looks wrong: {MARKDOWN}"
+
+
+@pytest.mark.parametrize("relative", ["README.md", "README_zh.md", "docs/DESIGN.md"])
+def test_public_documents_keep_their_sequence_diagrams(relative):
+    """The published workflow walkthroughs stay diagrammed, not prose-only."""
+    diagrams = [body for info, body, _ in _fenced_blocks((ROOT / relative).read_text(encoding="utf-8"))
+                if _MERMAID_FENCE.match(info)]
+    assert diagrams, f"No Mermaid diagram left in {relative}"
+    assert any(next((row.strip() for row in body if row.strip()), "").lower() == "sequencediagram"
+               for body in diagrams), f"No sequenceDiagram left in {relative}"
+
+
+@pytest.mark.parametrize("relative", MARKDOWN)
+def test_mermaid_fences_use_the_exact_language_identifier(relative):
+    """GitHub renders a diagram only when the fence language is exactly 'mermaid'."""
+    text = (ROOT / relative).read_text(encoding="utf-8", errors="replace")
+    for info, _body, line in _fenced_blocks(text):
+        if _NEAR_MISS_FENCE.match(info) and not _MERMAID_FENCE.match(info):
+            pytest.fail(f"{relative}:{line}: write the fence as ```mermaid, found {info!r}")
+
+
+@pytest.mark.parametrize("relative", MARKDOWN)
+def test_sequence_diagrams_never_contain_a_raw_semicolon(relative):
+    """A raw ASCII semicolon ends a Mermaid statement in *every* sequence-diagram
+    position: a Note, a message text, a participant alias, an alt/loop label and a
+    title each abort the whole diagram on GitHub with "Parse error ... Expecting ...".
+    The entity code #59; keeps the literal character. ``flowchart`` and
+    ``stateDiagram-v2`` labels tolerate a raw semicolon (checked against Mermaid's
+    own parser), so they are deliberately left unrestricted here. A ``%%`` line is
+    a comment and is skipped, but an inline ``%%`` is *not*: it stays part of the
+    statement, so a semicolon after it still ends the diagram.
+    """
+    text = (ROOT / relative).read_text(encoding="utf-8", errors="replace")
+    for info, body, line in _fenced_blocks(text):
+        if not _MERMAID_FENCE.match(info):
+            continue
+        head = next((row.strip() for row in body if row.strip()), "")
+        if head.lower() != "sequencediagram":
+            continue
+        for offset, row in enumerate(body):
+            if row.lstrip().startswith("%%"):
+                continue
+            statement = _ENTITY_CODE.sub("", row)
+            assert ";" not in statement, (
+                f"{relative}:{line + offset}: a raw ';' ends the Mermaid statement; "
+                f"escape it as #59;: {row.strip()}"
+            )
 
 
 @pytest.mark.parametrize("relative, marker", [
