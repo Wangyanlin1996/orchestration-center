@@ -17,6 +17,7 @@
 
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from orchestrate.core.model.psop import PSOP, JumpCondition, Step, StepType, Task
@@ -25,16 +26,21 @@ from orchestrate.validation.sandbox_validator import (
     validate_sandbox_static,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 TASK_T = "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Task-T/v1"
 NEGOTIATION_T = "https://projects.tmforum.org/a2aproject/telecommunication/extensions/Negotiation-T/v1"
 
 
 def test_validator_can_be_imported_before_sandbox_package():
+    # A child interpreter imports ``orchestrate`` from its working directory, so pin the
+    # repository root instead of inheriting the directory pytest happened to start in.
     result = subprocess.run(
         [sys.executable, "-c", "from orchestrate.validation.sandbox_validator import SandboxCheck"],
         capture_output=True,
         text=True,
         check=False,
+        cwd=PROJECT_ROOT,
     )
     assert result.returncode == 0, result.stderr
 
