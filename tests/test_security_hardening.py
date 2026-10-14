@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import threading
+from pathlib import Path
 
 import anyio
 import pytest
@@ -31,6 +32,8 @@ from orchestrate.server.auth import get_session_store
 from orchestrate.core.persistence import WorkflowStorage, WorkflowStorageError
 from orchestrate.persistence import StorageContext
 from orchestrate.persistence.sql_backend import SqlPersistenceBackend
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _database_context(mode="postgresql"):
@@ -251,7 +254,10 @@ def test_import_does_not_set_testing_for_other_test_modules():
         "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
         "assert 'TESTING' not in os.environ"
     )
-    result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+    # The child executes this module by path and imports ``orchestrate``, so pin the
+    # repository root instead of inheriting the directory pytest happened to start in.
+    result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True,
+                            text=True, cwd=PROJECT_ROOT)
     assert result.returncode == 0, result.stderr
 
 
