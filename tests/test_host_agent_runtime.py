@@ -130,7 +130,9 @@ async def test_execute_uses_explicit_psop_id_and_wraps_sdk_events(monkeypatch):
 
     async def get_psop(psop_id):
         loaded_ids.append(psop_id)
-        return _workflow()
+        workflow = _workflow()
+        workflow.id = psop_id
+        return workflow
 
     async def load_agent_cards():
         return [SimpleNamespace(name="stub-agent")]

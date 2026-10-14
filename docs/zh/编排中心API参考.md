@@ -28,11 +28,11 @@ SPDX-License-Identifier: Apache-2.0
   - **SOP 编排**：上传 PDF/TXT/MD 文件或提交自然语言 SOP 步骤，自动生成 PSOP 工作流。
   - **意图编排**：提交自然语言任务意图，由 LLM 自主规划生成 PSOP 工作流。
   - **检索工作流**：提交自然语言意图，匹配平台内已有工作流，返回最相关的 TopN 个工作流（含 ID、名称、描述等）。
-  - **自动编排+执行**：提交任务描述，自动检索匹配工作流并执行；无匹配则自动生成工作流后执行，通过 SSE 实时推送进度与结果。
+  - **按意图检索并执行**：提交任务描述，检索已有工作流并执行，通过 SSE 推送进度与结果；无匹配时不会自动生成，默认 Host 通过 SSE `error` 报错。
   - **执行指定工作流**：根据已知的 PSOP ID 启动执行，通过 SSE 实时推送执行进度与结果。
   - **查询执行结果**：根据执行 ID 获取工作流执行记录的详细信息。
 
-  所有接口基础路径为 **`/api/v1`**。
+  公开集成接口使用 **`/api/v1`**。内部浏览器/沙箱接口使用 **`/rest/v1/orchestrate`**；下文完整路径不要再拼接 `/api/v1`。
 
 ### 响应格式
 
@@ -68,7 +68,7 @@ SPDX-License-Identifier: Apache-2.0
 - **数据库模式（PostgreSQL/MySQL）**：用户存储在数据库中，使用版本化密码哈希。支持用户管理；自助注册默认关闭，可通过 `auth.register.enabled=true` 显式开启。
 - **文件模式**：通过 `server.conf` 的 `access_password` 配置单一密码，用户名固定为 `admin`。
 
-设置 `access_password`（文件模式）或 `users` 表有用户（PostgreSQL/MySQL 模式）时认证开启。开启后所有内部 API 请求必须携带有效令牌。
+HTTP 与 HTTPS 均强制认证。file 模式须配置密码哈希；SQL 空用户库首次引导须提供 `OC_ADMIN_INITIAL_PASSWORD` 或 `admin_initial_password_file`。缺配置拒绝启动，账号后端故障返回 503 而非放行匿名请求。首次在网页完成改密并重新登录后，才能获取公开 API Token。
 
 **登录：**
 ```bash
@@ -90,8 +90,8 @@ SSE 端点（`EventSource`）使用同一会话 Cookie 认证，浏览器会自�
 
 注册新用户（仅 PostgreSQL/MySQL 模式且已设置 `auth.register.enabled=true`）：
 ```bash
-curl -X POST https://127.0.0.1:5001/rest/v1/orchestrate/auth/register \\
-  -H "Content-Type: application/json" \\
+curl -X POST https://127.0.0.1:5001/rest/v1/orchestrate/auth/register \
+  -H "Content-Type: application/json" \
   -d '{"username":"newuser","password":"<明文密码>"}'
 ```
 
@@ -126,7 +126,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
 
 - 功能描述
 
-    接收 PDF/TXT/MD 文件（PDF 解析 "5. Interaction Flow" 章节，TXT/MD 直接读取全文）或 JSON 格式的 SOP 步骤文本，结合可用 Agent 列表，由 LLM 生成 PSOP 工作流并自动保存。
+    接收 PDF/TXT/MD 文件（PDF 章节标题必须精确为 `5. Interaction Flow`，即交互流程；TXT/MD 直接读取全文）或 JSON 格式的 SOP 步骤文本，结合可用 Agent 列表，由 LLM 生成 PSOP 工作流并自动保存。
 
 - 接口约束
 
@@ -189,6 +189,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
     POST /api/v1/orchestrate/sop HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "sop_content": "## 节能流程\n1. 收集设备状态数据\n2. 分析能耗基线\n3. 执行节能策略",
@@ -205,7 +206,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
     | status   | string | `"success"`                    |
     | data     | object | 生成的 PSOP 工作流完整对象      |
 
-    **PSOP 对象结构（data 字段）**: 参见 [附录 A：PSOP 数据结构](#附录-a-psop-数据结构)。
+    **PSOP 对象结构（data 字段）**: 参见 [附录 A：PSOP 数据结构](#附录-apsop-数据结构)。
 
 - 响应示例
 
@@ -277,6 +278,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
     POST /api/v1/orchestrate/intent HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "intent": "帮我做一次全网节能优化",
@@ -358,6 +360,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
     POST /api/v1/orchestrate/search HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "intent": "帮我做一次网络故障根因分析",
@@ -464,7 +467,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
 
 - 返回参数（data 字段）
 
-  详见 [PSOP 数据结构](#附录-a-psop-数据结构)。
+  详见 [PSOP 数据结构](#附录-apsop-数据结构)。
 
 - 错误码
 
@@ -475,84 +478,63 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
 
 ---
 
-### SSE 事件类型说明
+### SSE 事件契约
 
-以下执行接口（`POST /orchestrate/execute`、`GET /orchestrate/execute/{psop_id}`）通过 SSE（Server-Sent Events）实时推送执行进度。每条 SSE 消息格式为：
+执行接口返回 `text/event-stream`。从 `data:` 帧解析 JSON，忽略空行和 `: heartbeat` 等心跳注释。转发层保留 SDK 原始载荷，不把所有帧统一成固定字段结构。多数事件使用 `type`/`data`/`timestamp`，早期错误也可能仅带顶层 `message`；字段取决于事件生产方，不能假定总有 agent、request 或 execution_history。
 
-```
-data: {"type": "<事件类型>", "data": {<事件数据>}, "timestamp": <时间戳>}
-```
+| 事件族 | 含义与消费方式 |
+| --- | --- |
+| `start` | 搜索、加载或下发阶段，可能多次出现；存在时读取 `data.phase`。 |
+| `psop_update` | `data.psop` 中的工作流快照，兼容对象或序列化 JSON。 |
+| SDK 事件 | 原样转发任务、步骤、Agent、路由、协商、通知和授权等事件，不是固定十一种；未知类型应安全忽略或记录类型。 |
+| `complete`、`error`、`cancelled` | 执行终态，取消不代表成功；错误说明可能在 data 或顶层 message。 |
 
-### 事件类型一览
+编排中心不生成 `init`，也不保证发送命名 `event: close` 或 JSON `close` 帧。通过传输 EOF 判断连接结束；没有执行终态的 EOF 不能视为成功。心跳只表示连接活跃。这里是单任务执行流，不是与任务状态无关的独立 Notification-T 订阅。
 
-| 事件类型         | 说明 | 触发时机 | data 字段关键内容 |
-|-----------------|------|----------|-------------------|
-| `init`          | 引擎初始化完成 | 执行开始时 | `psop_id` — 工作流 ID |
-| `start`         | 流程开始执行 | init 之后 | `psop_id`, `message` |
-| `agent_request` | 向 Agent 发送任务 | 每步开始时 | `agent` — 目标 agent 名, `request` — protobuf 格式的请求体 |
-| `agent_response`| Agent 返回结果 | 每步完成时 | `agent` — 来源 agent 名, `response` — protobuf 格式的响应体 |
-| `negotiation_request` | 协商请求发送 | 引擎发起 A2A-T 协商时 | `agent`, `negotiation_id` |
-| `negotiation_resolved` | 协商达成一致 | 协商达成协议时 | `agent`, `negotiation_id`, `resolution` |
-| `negotiation_failed` | 协商失败 | 协商被拒绝或超时时 | `agent`, `negotiation_id`, `reason` |
-| `psop_update`   | 工作流状态更新 | 每步完成后 | `psop` — 完整 PSOP JSON（含各任务 status: pending/success/failed） |
-| `complete`      | 工作流执行完成 | 所有步骤完成后 | `psop_id`, `execution_history` — 步骤级执行历史 |
-| `error`         | 执行异常 | 执行失败或取消时 | `psop_id`, `error` — 错误描述 |
-| `close`         | SSE 连接关闭 | complete/error 之后 | 空 `{}` |
-
-### SSE 事件推送示例
-
-**正常流程序列：**
-```
-init → start → agent_request → agent_response → psop_update
-  → agent_request → agent_response → psop_update
-  → ... (每步重复) ...
-  → complete → close
-```
-
-**错误中断序列：**
-```
-init → start → ... → error → close
-```
+执行记录只保存有界事件尾部（当前上限 1000），丢弃早期事件时在 events 数组头部增加 type=events_truncated、data.dropped 标记事件（最多 1000 条保留事件加该标记）。转发层不重建完整 `execution_history`，该字段可能为空，不能承诺完整回放。
 
 ### 解析示例（Python）
 
+先通过账号登录取得 `OC_TOKEN`，将 `PSOP_ID` 设置为已保存工作流 ID。下面使用本机 HTTP；HTTPS 设置 `OC_BASE_URL`，通过 `REQUESTS_CA_BUNDLE` 信任部署 CA。监听器开启 mTLS 时还需提供客户端证书/私钥。生产不要关闭服务端证书校验。
+
 ```python
-import requests, json
-resp = requests.get(
-    "http://127.0.0.1:5001/api/v1/orchestrate/execute/{psop_id}?lang=zh",
+import json
+import os
+from urllib.parse import quote
+import requests
+
+base = os.environ.get("OC_BASE_URL", "http://127.0.0.1:5001").rstrip("/")
+psop_id = quote(os.environ["PSOP_ID"], safe="")
+terminal = False
+with requests.get(
+    f"{base}/api/v1/orchestrate/execute/{psop_id}?lang=zh",
+    headers={"Authorization": f"Bearer {os.environ['OC_TOKEN']}"},
     stream=True,
-)
-for line in resp.iter_lines(decode_unicode=True):
-    if not line or not line.startswith("data: "):
-        continue
-    event = json.loads(line[6:])
-    etype = event["type"]
-    if etype == "agent_request":
-        print(f"→ {event['data']['agent']}")
-    elif etype == "agent_response":
-        print(f"← {event['data']['agent']}")
-    elif etype == "psop_update":
-        psop = event["data"].get("psop", {})
-        if isinstance(psop, str):
-            psop = json.loads(psop)
-        for step in psop.get("steps", []):
-            print(f"  {step['name']}: {[t['status'] for t in step['subtasks']]}")
-    elif etype in ("complete", "error"):
-        print(f"[{etype}]")
-        break
+    timeout=(10, 60),  # 读取空闲超时；编排中心通常每 15 秒发送心跳
+) as response:
+    response.raise_for_status()
+    for line in response.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        event = json.loads(line[5:].strip())
+        kind = event.get("type")
+        print(kind)  # 共享日志中不输出可能敏感的事件载荷。
+        if kind in {"complete", "error", "cancelled"}:
+            terminal = True
+            break
+if not terminal:
+    raise RuntimeError("执行流结束，但未收到执行终态")
 ```
 
----
-
-## 4. 自动编排+执行接口
+## 4. 按意图检索并执行接口
 
 - 典型场景
 
-    用户直接提交任务需求，系统自动判定是否有匹配的已有工作流，有则直接执行，无则先生成再执行。适用于"一句话驱动"的端到端任务场景。
+    流程库中已有可用工作流，调用方只提供任务描述，由系统检索并选择流程执行。如果需要审核选择结果，请先检索再按 ID 执行。
 
 - 功能描述
 
-    接收任务描述文本，首先通过 LLM 检索匹配的已有 PSOP 工作流。若匹配成功，直接以 SSE 流执行；若无匹配，自动调用意图编排生成新的 PSOP，保存后立即执行。全程通过 SSE（Server-Sent Events）实时推送执行进度。
+    接收任务描述，检索已有 PSOP，并把选中的 ID 与快照下发给 Host Agent 执行。此接口不会自动生成或保存新工作流。中心无匹配时仍下发裸意图，默认 Host 再次检索无结果后返回 `No matching workflow found`，通过 SSE `error` 结束本次执行并记录失败，而不是成功 `complete`。需要新流程时，先调用 `POST /api/v1/orchestrate/intent`，该接口生成并保存 PSOP；成功后读取响应 `data.id`，再调用 `GET /api/v1/orchestrate/execute/{psop_id}`。不要在收到无匹配错误后无条件重试执行接口。
 
 - 接口约束
 
@@ -574,8 +556,8 @@ for line in resp.iter_lines(decode_unicode=True):
 
     | 参数名称 | 是否必选 | 类型   | 值域 | 默认值 | 描述                                   |
     |----------|----------|--------|------|--------|----------------------------------------|
-    | task     | 是       | string | -    | -      | 任务描述，系统会先检索已有 PSOP，无匹配则自动生成 |
-    | name     | 否       | string | -    | -      | 可选的工作流名称（用于自动生成场景）     |
+    | task     | 是       | string | 1–10000 字符 | - | 用于检索已有工作流的任务描述，不触发生成 |
+    | name     | 否       | string | 最多 256 字符 | - | 已弃用，仅兼容接收，忽略且无效果；新流程名称在意图编排接口设置 |
 
 - 请求示例
 
@@ -583,70 +565,32 @@ for line in resp.iter_lines(decode_unicode=True):
     POST /api/v1/orchestrate/execute HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
-        "task": "帮我做一次网络故障根因分析",
-        "name": "故障根因分析"
+        "task": "帮我做一次网络故障根因分析"
     }
     ```
 
 - 响应格式（SSE 事件流）
 
-    响应为 `text/event-stream`，事件格式如下：
-
-    ```
-    data: {"type": "init", "data": {...}}
-    data: {"type": "start", "data": {...}}
-    data: {"type": "agent_request", "data": {...}}
-    data: {"type": "agent_response", "data": {...}}
-    data: {"type": "psop_update", "data": {...}}
-    data: {"type": "complete", "data": {...}}
-    event: close
-    data: {}
-    ```
-
-    **SSE 事件类型说明：**
-
-    | 事件类型       | 描述                                                    |
-    |----------------|---------------------------------------------------------|
-    | init           | 执行引擎初始化，包含 `psop_id`                           |
-    | start          | 执行开始通知                                            |
-    | agent_request  | Agent 任务下发事件，包含 `agent`（Agent名称）、`request`（下发请求内容） |
-    | agent_response | Agent 执行结果返回事件，包含 `agent`（Agent名称）、`response`（执行结果内容） |
-    | psop_update    | PSOP 工作流状态更新，包含 `psop`（完整 PSOP 对象，含各子任务最新状态） |
-    | complete       | 所有步骤执行完成，包含 `execution_history` 汇总           |
-    | error          | 执行失败，包含 `error` 描述                              |
-    | close          | SSE 流结束信号                                          |
-
-    每个事件 JSON 包含 `type`（事件类型）、`data`（事件数据）、`timestamp`（时间戳）三个字段。
-
-    执行完成后，系统自动保存 `ExecutionRecord` 执行记录，可通过 [查询执行结果详情](#7-查询执行结果详情) 获取详情。
-
-- 响应示例
-
-    ```
-    data: {"type":"init","data":{"psop_id":"a1b2c3d4-...","message":"Initializing execution engine"},"timestamp":12345.67}
-    data: {"type":"start","data":{"psop_id":"a1b2c3d4-...","message":"Execution started"},"timestamp":12345.68}
-    data: {"type":"agent_request","data":{"agent":"RAN Energy Saver","request":"{\"message\":...}"},"timestamp":12345.70}
-    data: {"type":"agent_response","data":{"agent":"RAN Energy Saver","response":"{\"status\":{\"state\":\"TASK_STATE_COMPLETED\"},...}"},"timestamp":12346.50}
-    data: {"type":"psop_update","data":{"psop":{"id":"...","steps":[...]}},"timestamp":12346.51}
-    data: {"type":"complete","data":{"psop_id":"a1b2c3d4-...","execution_history":[...]},"timestamp":12347.00}
-    event: close
-    data: {}
-    ```
+  载荷、EOF 与心跳语义见上方 SSE 事件契约。一种可能序列是 `start → SDK 事件 → psop_update → complete → EOF`，具体顺序与次数取决于工作流。失败和取消使用 `error`/`cancelled`，不是成功 `complete`。执行记录有大小边界，不是完整会话记录。
 
 - 错误码
 
     | 状态码 | 说明                              |
     |--------|-----------------------------------|
-    | 500    | 自动生成 PSOP 失败                 |
+    | 422    | 请求体或字段校验失败               |
+    | 500    | 流建立前发生服务错误               |
     | 503    | 并发数已满，服务器繁忙             |
 
-    > 执行过程中的运行时错误通过 SSE `error` 事件推送，不会体现在 HTTP 状态码上。
+    > 流建立前仍可能因认证、限流或依赖故障返回对应的 HTTP 错误；流已建立后的无匹配或执行错误通过 SSE `error` 推送，HTTP 200 不能视为执行成功。错误载荷为 `{"type":"error","data":{"error":"No matching workflow found"}}`（其他事件字段省略）。
 
 ---
 
 ## 5. 执行指定工作流接口
+
+> **工作流绑定**：中心加载请求指定的 PSOP，将其 ID 与独立快照下发给 Host Agent，不再按意图重新检索。`user_intent` 只提供运行上下文，不会重新选择工作流；快照捕获后的编辑只影响后续执行。Host 对无效或不一致的显式元数据报错，不降级为意图检索。指定 PSOP 不存在时，在下发前返回 HTTP 404；流已建立后的 Host 校验失败通过 SSE `error` 表达。内部 `/rest/v1/orchestrate/execute?psop_id=...` 同样遵循此规则。仅按意图执行仍是独立的选择路径。
 
 - 典型场景
 
@@ -686,7 +630,7 @@ for line in resp.iter_lines(decode_unicode=True):
 
 - 响应格式（SSE 事件流）
 
-    与 [自动编排+执行接口](#4-自动编排执行接口) 相同的 SSE 事件格式。
+    与 [按意图检索并执行接口](#4-按意图检索并执行接口) 相同的 SSE 事件格式。
 
 - 错误码
 
@@ -863,10 +807,10 @@ for line in resp.iter_lines(decode_unicode=True):
 
 | 方法 | URI | 描述 |
 |------|-----|------|
-| GET    | `/orchestrate/sandbox/verifications` | 查询持久化沙箱报告列表 |
-| GET    | `/orchestrate/sandbox/verifications/{verification_id}` | 获取已完成报告和事件 |
-| GET    | `/orchestrate/sandbox/verifications/{verification_id}/events` | 获取执行事件 |
-| DELETE | `/orchestrate/sandbox/verifications/{verification_id}` | 取消运行中的验证或删除持久化报告 |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications` | 查询持久化沙箱报告列表 |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}` | 获取已完成报告和事件 |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}/events` | 获取执行事件 |
+| DELETE | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}` | 取消运行中的验证或删除持久化报告 |
 
 已完成报告负载包含 `status`、`report` 和 `events`。`report` 包含结论、静态检查、执行路径、上下文链路、Stub 交互、风险、建议和可选错误信息。删除运行中验证时会先取消后台任务，再移除报告；删除操作不可恢复，响应返回 `data.deleted = <verification_id>`。
 
@@ -874,8 +818,8 @@ for line in resp.iter_lines(decode_unicode=True):
 
 | 方法 | URI | 描述 |
 |------|-----|------|
-| GET | `/orchestrate/sandbox/templates/{workflow_id}` | 查询已保存模板 |
-| PUT | `/orchestrate/sandbox/templates/{workflow_id}` | 替换已保存模板；请求体是 JSON 数组 |
+| GET | `/rest/v1/orchestrate/sandbox/templates/{workflow_id}` | 查询已保存模板 |
+| PUT | `/rest/v1/orchestrate/sandbox/templates/{workflow_id}` | 替换已保存模板；请求体是 JSON 数组 |
 
 模板最多 200 条；额外字段和非白名单响应变量会被拒绝。
 
@@ -946,37 +890,35 @@ for line in resp.iter_lines(decode_unicode=True):
 ### 典型调用流程
 
 ```
-                        ┌─────────────────────────┐
-                        │ POST /orchestrate/search │  ← 检索工作流
-                        │ { intent: "...", top_n } │
-                        └──────────┬──────────────┘
-                                   │ 返回 TopN 摘要列表
-                                   ▼
-                    ┌──────────────────────────────┐
-                    │ 调用方选择目标 ID              │
-                    └──────────────┬───────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              │ 已有匹配           │                     │ 无匹配
-              ▼                    │                     ▼
-   ┌──────────────────────┐       │          ┌─────────────────────┐
-   │ GET /orchestrate/    │       │          │ POST /orchestrate/   │
-   │   execute/{id}       │       │          │   intent             │
-   │ SSE 执行指定工作流    │       │          │ 意图编排→保存→返回    │
-   └──────────┬───────────┘       │          └──────────┬──────────┘
-              │                   │                     │
-              └───────────────────┼─────────────────────┘
-                                  │ 或直接走一站式：
-                                  ▼
-                    ┌──────────────────────────────┐
-                    │ POST /orchestrate/execute     │
-                    │ 自动检索 + 执行 / 生成 + 执行  │
-                    │ (SSE 实时推送)                │
-                    └──────────┬───────────────────┘
-                               │
-                               ▼
-                    ┌──────────────────────────────┐
-                    │ GET /executions/{id}          │
-                    │ 查询执行结果详情               │
-                    └──────────────────────────────┘
+POST /api/v1/orchestrate/search  →  调用方检查 TopN 结果
+                 │
+         ┌───────┴─────────────────┐
+         │ 选择已有工作流           │ 没有可用工作流
+         │                         ▼
+         │          POST /api/v1/orchestrate/intent
+         │          生成并保存，读取成功响应 data.id
+         └──────────────┬──────────┘
+                        ▼
+GET /api/v1/orchestrate/execute/{psop_id}  →  SSE 执行指定流程
+                        │
+                        ▼
+GET /api/v1/executions  →  从记录列表获取 execution_id
+                        │
+                        ▼
+GET /api/v1/executions/{execution_id}  →  查询执行详情
 ```
+
+若接受系统直接选择已有流程，可调用 `POST /api/v1/orchestrate/execute`，只传 `task`；它不是生成与执行的组合接口，无匹配时按第 4 节处理 SSE 错误。生成接口与执行接口分别受各自配额、认证及模型可用性约束，生成成功不保证执行成功。
+
+## 前端内部接口补充
+
+以下路径使用 `/rest/v1/orchestrate`，不是 `/api/v1`。遵循浏览器会话及允许的内部身份策略；AgentCard 写操作需要管理员权限。
+
+| 方法 | 相对路径 | 入参与结果 |
+| --- | --- | --- |
+| GET | `/solution-packages` | 列出已保存方案包 |
+| GET / DELETE | `/solution-packages/{pdf_filename}` | 获取/删除指定方案包，不存在返回 404 |
+| PUT / DELETE | `/agent-cards/{organization}/{name}` | 管理员注册中心代理；PUT 卡片名称/组织必须匹配路径 |
+| GET | `/dispatch` | 必填 intent、agent_name，可选 lang；返回单个已注册 Agent 的 SSE |
+
+名称中的空格等必须逐路径段 URL 编码；不存在删除全部方案包的 `DELETE /solution-packages`。沙箱接口见第 8 节。

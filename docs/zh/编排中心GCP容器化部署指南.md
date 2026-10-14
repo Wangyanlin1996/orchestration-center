@@ -1,4 +1,6 @@
 <!--
+
+> 历史方案，当前镜像不支持：以下步骤未适配账号首次引导、完整模型挂载、独立注册中心身份与 Secret Manager。`deploy-all.ps1` 已在云操作前拒绝执行。请使用当前 [Helm/Compose 部署契约](https://github.com/project-openan/openan-installation/blob/main/containerized/TRANSPORT_DEPLOYMENT.md)，不能将旧指南作为已验收的现行 GCP 部署步骤。
 Copyright (c) 2026 Huawei Technologies Co., Ltd.
 All Rights Reserved.
 

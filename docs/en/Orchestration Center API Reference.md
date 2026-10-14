@@ -28,11 +28,11 @@ SPDX-License-Identifier: Apache-2.0
   - **SOP Orchestration**: Upload PDF/TXT/MD files or submit natural language SOP steps to automatically generate a PSOP workflow.
   - **Intent Orchestration**: Submit natural language task intent and let the LLM autonomously plan and generate a PSOP workflow.
   - **Search Workflow**: Submit natural language intent to match existing workflows in the platform, returning the most relevant TopN workflows (including ID, name, description, etc.).
-  - **Auto-Orchestration + Execution**: Submit a task description to automatically search for matching workflows and execute them; if no match is found, generate a new workflow and then execute it, with real-time progress and results pushed via SSE.
+  - **Search and Execute by Intent**: Submit a task description to select an existing workflow and execute it via SSE. No match does not trigger generation; the default Host reports an SSE `error`.
   - **Execute Specific Workflow**: Start execution based on a known PSOP ID, with real-time execution progress and results pushed via SSE.
   - **Query Execution Result**: Get detailed information about a workflow execution record by execution ID.
 
-  All API endpoints use the base path **`/api/v1`**.
+  Public integration endpoints use **`/api/v1`**. Internal browser/sandbox endpoints use **`/rest/v1/orchestrate`**; their complete paths must not be prefixed with `/api/v1`.
 
 ### Response Format
 
@@ -66,7 +66,7 @@ Internal and public APIs share account authentication by default, with two accou
 - **Database mode (PostgreSQL/MySQL)**: Users are stored in the database with versioned password hashes. User management is available; self-registration is disabled by default and requires `auth.register.enabled=true`.
 - **File mode**: A single password is configured via `access_password` in `server.conf`. Username is `admin` only.
 
-Authentication is enabled when `access_password` is set (file mode) or when the `users` table has at least one user (PostgreSQL/MySQL mode). When enabled, all internal API requests must include a valid token.
+Authentication is mandatory in HTTP and HTTPS modes. File mode needs a password hash; an empty SQL user store needs `OC_ADMIN_INITIAL_PASSWORD` or `admin_initial_password_file` for first boot. Missing configuration rejects startup; account-backend failure returns 503 rather than allowing anonymous requests. Complete the initial password change in the UI and log in again before obtaining a public API token.
 
 **Login:**
 ```bash
@@ -197,6 +197,7 @@ integrations are described in [transport configuration](../transport-runtime.md)
     POST /api/v1/orchestrate/sop HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "sop_content": "## Energy Saving Process\n1. Collect device status data\n2. Analyze energy consumption baseline\n3. Execute energy saving strategy",
@@ -285,6 +286,7 @@ integrations are described in [transport configuration](../transport-runtime.md)
     POST /api/v1/orchestrate/intent HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "intent": "Help me perform a network-wide energy saving optimization",
@@ -366,6 +368,7 @@ integrations are described in [transport configuration](../transport-runtime.md)
     POST /api/v1/orchestrate/search HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
         "intent": "Help me perform a network fault root cause analysis",
@@ -483,84 +486,63 @@ integrations are described in [transport configuration](../transport-runtime.md)
 
 ---
 
-### SSE Event Type Description
+### SSE Event Contract
 
-The following execution endpoints (`POST /orchestrate/execute`, `GET /orchestrate/execute/{psop_id}`) push real-time execution progress via SSE (Server-Sent Events). Each SSE message has the format:
+Execution endpoints return `text/event-stream`. Parse JSON from `data:` frames; ignore blank lines and heartbeat comments such as `: heartbeat`. The relay preserves SDK payloads rather than normalizing every frame to one schema. Most frames use `type`/`data`/`timestamp`; early errors can carry a top-level `message`. Fields are event-specific and optional unless defined by the producing SDK.
 
-```
-data: {"type": "<event type>", "data": {<event data>}, "timestamp": <timestamp>}
-```
+| Event family | Meaning and consumer guidance |
+| --- | --- |
+| `start` | Search/load/dispatch phase; may occur multiple times. Inspect `data.phase` when present. |
+| `psop_update` | Workflow snapshot in `data.psop`; tolerate object or serialized JSON. |
+| SDK events | Task, step, agent, routing, negotiation, notification and authorization events are passed through; the set is not a closed list of eleven events. Ignore/log unknown types safely. |
+| `complete`, `error`, `cancelled` | Execution outcomes. Cancellation is not successful completion. Error text may be in data or top-level message. |
 
-### Event Type Reference
+There is no center-generated `init` event and no guaranteed named `event: close` or JSON `close` frame. Detect transport EOF; EOF without a terminal outcome must not be interpreted as success. Heartbeats mean the connection is active, not that execution succeeded. This is a task execution stream, not the independent, task-state-agnostic Notification-T subscription.
 
-| Event Type      | Description                | Trigger Timing         | Key data Field Contents          |
-|-----------------|----------------------------|------------------------|----------------------------------|
-| `init`          | Engine initialization complete | At execution start | `psop_id` — Workflow ID       |
-| `start`         | Workflow execution begins  | After `init`           | `psop_id`, `message`           |
-| `agent_request` | Task sent to Agent         | At each step start     | `agent` — target agent name, `request` — protobuf-formatted request body |
-| `agent_response`| Agent returns result       | At each step completion | `agent` — source agent name, `response` — protobuf-formatted response body |
-| `negotiation_request` | Negotiation request sent | When engine initiates A2A-T negotiation | `agent`, `negotiation_id` |
-| `negotiation_resolved` | Negotiation resolved | When negotiation reaches agreement | `agent`, `negotiation_id`, `resolution` |
-| `negotiation_failed` | Negotiation failed | When negotiation is rejected or times out | `agent`, `negotiation_id`, `reason` |
-| `psop_update`   | Workflow status update     | After each step        | `psop` — complete PSOP JSON (with task status: pending/success/failed) |
-| `complete`      | Workflow execution complete | After all steps are done | `psop_id`, `execution_history` — step-level execution history |
-| `error`         | Execution exception        | On execution failure or cancellation | `psop_id`, `error` — error description |
-| `close`         | SSE connection closed      | After `complete`/`error` | Empty `{}`                    |
-
-### SSE Event Push Example
-
-**Normal Flow Sequence:**
-```
-init → start → agent_request → agent_response → psop_update
-  → agent_request → agent_response → psop_update
-  → ... (repeat per step) ...
-  → complete → close
-```
-
-**Error Interruption Sequence:**
-```
-init → start → ... → error → close
-```
+The execution record retains a bounded tail of events (currently 1000) and prepends an `events_truncated` sentinel event with `data.dropped` when earlier frames were discarded (1000 retained events plus that marker). `execution_history` is not reconstructed by this relay and may be empty; do not promise complete replay from the stored record.
 
 ### Parsing Example (Python)
 
+Set `OC_TOKEN` from the account login response, and `PSOP_ID` to an existing workflow ID. The example uses local HTTP; for HTTPS set `OC_BASE_URL` and trust a deployment CA via `REQUESTS_CA_BUNDLE`. If the listener requires mTLS, additionally supply your client certificate/key. Do not disable TLS verification in production.
+
 ```python
-import requests, json
-resp = requests.get(
-    "http://127.0.0.1:5001/api/v1/orchestrate/execute/{psop_id}?lang=zh",
+import json
+import os
+from urllib.parse import quote
+import requests
+
+base = os.environ.get("OC_BASE_URL", "http://127.0.0.1:5001").rstrip("/")
+psop_id = quote(os.environ["PSOP_ID"], safe="")
+terminal = False
+with requests.get(
+    f"{base}/api/v1/orchestrate/execute/{psop_id}?lang=zh",
+    headers={"Authorization": f"Bearer {os.environ['OC_TOKEN']}"},
     stream=True,
-)
-for line in resp.iter_lines(decode_unicode=True):
-    if not line or not line.startswith("data: "):
-        continue
-    event = json.loads(line[6:])
-    etype = event["type"]
-    if etype == "agent_request":
-        print(f"→ {event['data']['agent']}")
-    elif etype == "agent_response":
-        print(f"← {event['data']['agent']}")
-    elif etype == "psop_update":
-        psop = event["data"].get("psop", {})
-        if isinstance(psop, str):
-            psop = json.loads(psop)
-        for step in psop.get("steps", []):
-            print(f"  {step['name']}: {[t['status'] for t in step['subtasks']]}")
-    elif etype in ("complete", "error"):
-        print(f"[{etype}]")
-        break
+    timeout=(10, 60),  # read idle timeout; center heartbeats normally arrive every 15s
+) as response:
+    response.raise_for_status()
+    for line in response.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        event = json.loads(line[5:].strip())
+        kind = event.get("type")
+        print(kind)  # Avoid printing sensitive payloads in shared logs.
+        if kind in {"complete", "error", "cancelled"}:
+            terminal = True
+            break
+if not terminal:
+    raise RuntimeError("Execution stream ended without a terminal outcome")
 ```
 
----
-
-## 4. Auto-Orchestration + Execution Interface
+## 4. Search and Execute by Intent Interface
 
 - Typical Scenario
 
-    A user directly submits a task requirement, and the system automatically determines whether a matching existing workflow exists: if yes, execute it directly; if no, generate one first and then execute. Suitable for "one-sentence-driven" end-to-end task scenarios.
+    The workflow library already contains usable workflows, and the caller supplies only a task description for automatic selection and execution. To review the selection first, search and then execute by ID.
 
 - Description
 
-    Accepts task description text, first performs LLM-based search for matching existing PSOP workflows. If a match is found, directly execute it via SSE stream; if no match is found, automatically invoke intent orchestration to generate a new PSOP, save it, and then execute it immediately. The entire process pushes real-time execution progress via SSE (Server-Sent Events).
+    Searches existing PSOPs and dispatches the selected ID and snapshot to the Host Agent. This endpoint does not generate or save a new workflow. When the center finds no match, it still dispatches the raw intent; if the default Host's search also returns no result, it reports `No matching workflow found` through SSE `error` and records failure, not successful `complete`. For a new workflow, call `POST /api/v1/orchestrate/intent` to generate and save it first; on success read `data.id` and call `GET /api/v1/orchestrate/execute/{psop_id}`. Do not unconditionally retry the execution endpoint after a no-match error.
 
 - Interface Constraints
 
@@ -582,8 +564,8 @@ for line in resp.iter_lines(decode_unicode=True):
 
     | Parameter | Required | Type   | Range | Default | Description                                                         |
     |-----------|----------|--------|-------|---------|---------------------------------------------------------------------|
-    | task      | Yes      | string | -     | -       | Task description. System searches existing PSOP first; auto-generates if no match |
-    | name      | No       | string | -     | -       | Optional workflow name (used in auto-generation scenario)            |
+    | task      | Yes      | string | 1–10000 characters | - | Task description to select an existing workflow; does not trigger generation |
+    | name      | No       | string | At most 256 characters | - | Deprecated compatibility input; accepted but ignored. Name new workflows through the intent orchestration endpoint |
 
 - Request Example
 
@@ -591,70 +573,32 @@ for line in resp.iter_lines(decode_unicode=True):
     POST /api/v1/orchestrate/execute HTTP/1.1
     Host: your-host:5001
     Content-Type: application/json
+    Authorization: Bearer <account-token>
 
     {
-        "task": "Help me perform a network fault root cause analysis",
-        "name": "Fault Root Cause Analysis"
+        "task": "Help me perform a network fault root cause analysis"
     }
     ```
 
 - Response Format (SSE Event Stream)
 
-    Response is of type `text/event-stream`, with the following event format:
-
-    ```
-    data: {"type": "init", "data": {...}}
-    data: {"type": "start", "data": {...}}
-    data: {"type": "agent_request", "data": {...}}
-    data: {"type": "agent_response", "data": {...}}
-    data: {"type": "psop_update", "data": {...}}
-    data: {"type": "complete", "data": {...}}
-    event: close
-    data: {}
-    ```
-
-    **SSE Event Type Description:**
-
-    | Event Type     | Description                                                                                     |
-    |----------------|-------------------------------------------------------------------------------------------------|
-    | init           | Execution engine initialization, includes `psop_id`                                            |
-    | start          | Execution start notification                                                                    |
-    | agent_request  | Agent task dispatch event, includes `agent` (Agent name), `request` (dispatch request content) |
-    | agent_response | Agent execution result return event, includes `agent` (Agent name), `response` (execution result content) |
-    | psop_update    | PSOP workflow status update, includes `psop` (complete PSOP object with latest subtask statuses) |
-    | complete       | All steps execution complete, includes `execution_history` summary                              |
-    | error          | Execution failed, includes `error` description                                                  |
-    | close          | SSE stream end signal                                                                           |
-
-    Each event JSON contains three fields: `type` (event type), `data` (event data), `timestamp` (timestamp).
-
-    After execution completes, the system automatically saves the `ExecutionRecord`. Details can be retrieved via the [Query Execution Result Interface](#7-query-execution-result-details).
-
-- Response Example
-
-    ```
-    data: {"type":"init","data":{"psop_id":"a1b2c3d4-...","message":"Initializing execution engine"},"timestamp":12345.67}
-    data: {"type":"start","data":{"psop_id":"a1b2c3d4-...","message":"Execution started"},"timestamp":12345.68}
-    data: {"type":"agent_request","data":{"agent":"RAN Energy Saver","request":"{\"message\":...}"},"timestamp":12345.70}
-    data: {"type":"agent_response","data":{"agent":"RAN Energy Saver","response":"{\"status\":{\"state\":\"TASK_STATE_COMPLETED\"},...}"},"timestamp":12346.50}
-    data: {"type":"psop_update","data":{"psop":{"id":"...","steps":[...]}},"timestamp":12346.51}
-    data: {"type":"complete","data":{"psop_id":"a1b2c3d4-...","execution_history":[...]},"timestamp":12347.00}
-    event: close
-    data: {}
-    ```
+  See the SSE Event Contract above for payload/EOF/heartbeat semantics. A possible sequence is `start → SDK events → psop_update → complete → EOF`; ordering and repetition depend on the workflow. Failures and cancellations use `error`/`cancelled`, not a successful `complete`. Execution records are bounded, not a full transcript.
 
 - Error Codes
 
     | Status Code | Description                              |
     |-------------|------------------------------------------|
-    | 500         | Auto-generation of PSOP failed           |
+    | 422         | Invalid request body or fields           |
+    | 500         | Service failure before the stream starts |
     | 503         | Concurrency limit reached, server busy   |
 
-    > Runtime errors during execution are pushed via SSE `error` events and will not be reflected in the HTTP status code.
+    > Authentication, rate limits or dependencies can fail with their HTTP status before the stream starts. Once streaming starts, no-match/execution failures use SSE `error`; HTTP 200 is not execution success. The error payload is `{"type":"error","data":{"error":"No matching workflow found"}}` (other event fields omitted).
 
 ---
 
 ## 5. Execute Specific Workflow Interface
+
+> **Workflow binding:** the center loads the requested PSOP and forwards its ID and a detached snapshot to the Host Agent without another intent search. `user_intent` supplies runtime context; it does not select a different workflow. Edits after snapshot capture apply only to subsequent executions. The Host rejects invalid or mismatched explicit metadata rather than falling back to an intent search. A missing requested PSOP returns HTTP 404 before dispatch; Host-side validation failures are reported through SSE `error` after streaming starts. The internal `/rest/v1/orchestrate/execute?psop_id=...` route follows the same binding rule. Intent-only execution remains a separate selection path.
 
 - Typical Scenario
 
@@ -694,7 +638,7 @@ for line in resp.iter_lines(decode_unicode=True):
 
 - Response Format (SSE Event Stream)
 
-    Same SSE event format as the [Auto-Orchestration + Execution Interface](#4-auto-orchestration--execution-interface).
+    Same SSE event format as the [Search and Execute by Intent Interface](#4-search-and-execute-by-intent-interface).
 
 - Error Codes
 
@@ -871,10 +815,10 @@ These editor-oriented endpoints are available only under `/rest/v1/orchestrate` 
 
 | Method | URI | Description |
 |--------|-----|-------------|
-| GET    | `/orchestrate/sandbox/verifications` | List persisted sandbox reports |
-| GET    | `/orchestrate/sandbox/verifications/{verification_id}` | Get report and events for a completed run |
-| GET    | `/orchestrate/sandbox/verifications/{verification_id}/events` | Get execution events |
-| DELETE | `/orchestrate/sandbox/verifications/{verification_id}` | Cancel an active run or delete its persisted report |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications` | List persisted sandbox reports |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}` | Get report and events for a completed run |
+| GET    | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}/events` | Get execution events |
+| DELETE | `/rest/v1/orchestrate/sandbox/verifications/{verification_id}` | Cancel an active run or delete its persisted report |
 
 A completed report payload contains `status`, `report`, and `events`. The `report` object includes verdict, static checks, execution path, context trace, Stub interactions, risks, suggestions, and optional error. Deletion cancels a queued/running task before removing its report and is permanent; the response returns `data.deleted = <verification_id>`.
 
@@ -882,8 +826,8 @@ A completed report payload contains `status`, `report`, and `events`. The `repor
 
 | Method | URI | Description |
 |--------|-----|-------------|
-| GET | `/orchestrate/sandbox/templates/{workflow_id}` | List saved templates |
-| PUT | `/orchestrate/sandbox/templates/{workflow_id}` | Replace saved templates; body is a JSON array |
+| GET | `/rest/v1/orchestrate/sandbox/templates/{workflow_id}` | List saved templates |
+| PUT | `/rest/v1/orchestrate/sandbox/templates/{workflow_id}` | Replace saved templates; body is a JSON array |
 
 Templates are limited to 200 entries. Extra fields and non-whitelisted response variables are rejected.
 
@@ -954,39 +898,35 @@ Templates are limited to 200 entries. Extra fields and non-whitelisted response 
 ### Typical Calling Flow
 
 ```
-                        ┌─────────────────────────┐
-                        │ POST /orchestrate/search │  ← Search workflows
-                        │ { intent: "...", top_n } │
-                        └──────────┬──────────────┘
-                                   │ Returns TopN summary list
-                                   ▼
-                    ┌──────────────────────────────┐
-                    │ Caller selects target ID      │
-                    └──────────────┬───────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              │ Match found        │                     │ No match
-              ▼                    │                     ▼
-   ┌──────────────────────┐       │          ┌─────────────────────┐
-   │ GET /orchestrate/    │       │          │ POST /orchestrate/   │
-   │   execute/{id}       │       │          │   intent             │
-   │ SSE execute specific │       │          │ Intent orchestration  │
-   │     workflow         │       │          │   → save → return    │
-   └──────────┬───────────┘       │          └──────────┬──────────┘
-              │                   │                     │
-              └───────────────────┼─────────────────────┘
-                                  │ Or directly via one-stop:
-                                  ▼
-                    ┌──────────────────────────────┐
-                    │ POST /orchestrate/execute     │
-                    │ Auto-search + execute /       │
-                    │ generate + execute             │
-                    │ (SSE real-time push)          │
-                    └──────────┬───────────────────┘
-                               │
-                               ▼
-                    ┌──────────────────────────────┐
-                    │ GET /executions/{id}          │
-                    │ Query execution result details│
-                    └──────────────────────────────┘
+POST /api/v1/orchestrate/search  →  Caller reviews TopN results
+                 │
+         ┌───────┴──────────────────────┐
+         │ Select existing workflow     │ No usable workflow
+         │                              ▼
+         │             POST /api/v1/orchestrate/intent
+         │             Generate and save; read successful data.id
+         └────────────────┬─────────────┘
+                          ▼
+GET /api/v1/orchestrate/execute/{psop_id}  →  SSE execution of selected workflow
+                          │
+                          ▼
+GET /api/v1/executions  →  Obtain execution_id from the records list
+                          │
+                          ▼
+GET /api/v1/executions/{execution_id}  →  Retrieve execution details
 ```
+
+If automatic selection of an existing workflow is acceptable, call `POST /api/v1/orchestrate/execute` with only `task`. It is not a combined generation/execution endpoint; handle a no-match SSE error as described in section 4. Generation and execution have separate quotas, authentication and model requirements; successful generation does not guarantee successful execution.
+
+## Internal frontend route inventory
+
+These routes use `/rest/v1/orchestrate`, not `/api/v1`. Browser sessions and permitted internal identity policies apply; AgentCard writes require admin permission.
+
+| Method | Relative path | Input/result |
+| --- | --- | --- |
+| GET | `/solution-packages` | List stored packages |
+| GET / DELETE | `/solution-packages/{pdf_filename}` | Get/remove one stored package; missing filename returns 404 |
+| PUT / DELETE | `/agent-cards/{organization}/{name}` | Admin-only registry proxy; PUT card name/organization must match URL |
+| GET | `/dispatch` | Required `intent` and `agent_name`; optional `lang`; returns SSE for one registered Agent |
+
+Encode each path component (spaces included); never concatenate untrusted names into URLs. There is no DELETE-all `/solution-packages` route. Sandbox routes are documented in section 8.

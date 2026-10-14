@@ -158,7 +158,7 @@ class MyCustomHandle(BaseHandler):
         """
         # Custom implementation
         # Recommendation: add specific business logic here
-        # Note: ensure the method is asynchronous
+        # Storage handler.handle is synchronous; async auth hooks are a different interface.
         result = "Custom result"
         return result
 ```
@@ -341,8 +341,8 @@ The internal API (`/rest/v1/orchestrate/*`) supports token-based authentication 
 
 **Database mode (`persistence_mode=postgresql` or `mysql`)**:
 - **User store**: `database/utils/user_store.py` -- CRUD operations on PostgreSQL/MySQL `users` table with versioned bcrypt password hashes
-- **Auto-seed**: `start.py` calls `seed_admin_if_empty()` on startup to create default admin (password: `OpenAN@2026`)
-- **Registration**: `POST /auth/register` endpoint available, username format validated, password complexity checked on frontend
+- **First boot**: an empty SQL user store requires `OC_ADMIN_INITIAL_PASSWORD` or `admin_initial_password_file`; `seed_admin_if_empty()` creates `admin` from that secret. Existing users are not reset. Change the initial password in the UI and log in again.
+- **Registration**: `POST /auth/register` endpoint available, username format validated, password complexity enforced by the backend (the UI also validates input)
 - **User management**: `GET /auth/users` (list), `DELETE /auth/users/{username}` (delete, admin protected)
 - **Auth module**: `orchestrate/server/auth.py` -- `SessionStore` maps token to (username, expiry), `auth_middleware`
 - **Auth endpoints**: `POST /auth/login`, `POST /auth/register`, `POST /auth/logout`, `GET /auth/check`, `GET /auth/users`, `DELETE /auth/users/{username}`
@@ -351,12 +351,12 @@ The internal API (`/rest/v1/orchestrate/*`) supports token-based authentication 
 **File mode (`persistence_mode=file`)**:
 - **Configuration**: Set `access_password` (SHA-256 hash) and `access_token_ttl` in `etc/conf/server.conf`
 - Single `admin` user with password from config, no registration or user management
-- Falls back to this mode when database is not available
+- Account storage does not fall back on database failure; unavailable authentication fails closed.
 
 **Common to both modes**:
-- **Token delivery**: session cookie (`Secure` when `enable_https=true`, `HttpOnly`, `SameSite=Lax`), or `Authorization: Bearer <token>` for non-browser clients. Query-parameter tokens are no longer accepted; `EventSource` picks up the cookie automatically
+- **Token delivery**: internal APIs accept an HttpOnly, SameSite=Lax cookie or Bearer header. Secure follows `public_scheme` or the trusted public request scheme, not backend TLS alone. EventSource uses the cookie. Public `/api/v1/*` requires an explicit Bearer from `POST /api/v1/auth/token`; cookies and URL tokens do not authenticate it.
 - **Password hashing**: the frontend sends the plaintext password over TLS; the backend hashes it (per-user salt in DB mode, or against the configured SHA-256 in file mode)
-- **Disable**: When `access_password` is empty and no users exist, authentication is disabled (backward compatible)
+- **Required**: no anonymous mode, loopback exemption or TESTING bypass. Missing account configuration rejects startup; runtime unavailability returns 503. Password changes, deletion and logout revoke sessions; API tokens have the same TTL.
 
 ### 6.2 TLS/HTTPS Configuration
 
@@ -441,12 +441,12 @@ client certificates from that CA instead.
 Outbound HTTPS calls (e.g., orchestration center -> registry center) use a shared SSL context factory:
 
 - **Module**: `workflow_engine.client.ssl_context` -- `create_ssl_context()` (provided by the workflow-engine SDK)
-- **Config**: `client_verify_server` in `server.conf` (default: `false` for backward compat)
+- **Config**: `client_verify_server` in `server.conf` (default: `true` in the public template and main-service factories)
 - **Features**: CA trust store verification, optional mTLS client cert, CRL checking, cipher suite enforcement
 - **Usage**: Called as `create_ssl_context(verify_server=...)` and passed to `httpx.AsyncClient(verify=...)` in `orchestrate/registry_client/client.py`
 
-When `client_verify_server=false`, the SSL context returns `False` (no verification), allowing connections to servers with self-signed certificates. Set to `true` in production with a properly configured CA trust store.
+When verification is disabled, an mTLS client identity is still loaded into an SSLContext; only server chain/hostname verification is disabled. Without client identity the client may use `verify=False`. Conflicting CA/CRL settings are rejected. Keep verification enabled with the correct CA in production; see [transport runtime](../transport-runtime.md).
 
 ### 6.4 External API Protection
 
-The external API (`/api/v1/*`) is protected by mTLS at the TLS layer. No application-layer auth middleware is needed -- the TLS handshake rejects connections without valid client certificates before any HTTP request reaches the application.
+Public `/api/v1/*` uses the same configured account as web login. Obtain a Bearer from `POST /api/v1/auth/token` and send it in `Authorization`; cookies/URL tokens do not authenticate public APIs. HTTP and HTTPS both require application authentication. `verify_client=true` adds an independent mTLS handshake requirement; a proxy certificate or a client's `verify=False` never substitutes for an account Token. See section 6.1 for bootstrap, expiry and revocation.

@@ -23,6 +23,7 @@ import json
 import time
 from collections.abc import Callable
 from contextlib import suppress
+from copy import deepcopy
 from typing import Any
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -39,6 +40,7 @@ from loguru import logger
 from workflow_engine import (
     EventCallback,
     EventType,
+    Workflow,
     execute_psop,
 )
 
@@ -252,17 +254,35 @@ class HostAgentExecutor(AgentExecutor):
 
     async def _resolve_workflow(self, context: RequestContext, intent: str):
         metadata = self._orchestration_metadata(context)
-        psop_snapshot = metadata.get("__orch_psop__")
-        if psop_snapshot:
+        psop_id = metadata.get("__orch_psop_id__")
+        if "__orch_psop_id__" in metadata and (not isinstance(psop_id, str) or not psop_id.strip()):
+            raise ValueError("Explicit PSOP ID must be a non-empty string")
+        if "__orch_psop__" in metadata:
             logger.info("[HostAgent] Using PSOP snapshot from orchestration center")
+            psop_snapshot = metadata["__orch_psop__"]
             if isinstance(psop_snapshot, str):
                 psop_snapshot = json.loads(psop_snapshot)
-            return psop_snapshot
+            if not isinstance(psop_snapshot, dict):
+                raise ValueError("Explicit PSOP snapshot must be an object")
+            snapshot_id = psop_snapshot.get("id")
+            if not isinstance(snapshot_id, str) or not snapshot_id.strip():
+                raise ValueError("Explicit PSOP snapshot must contain an ID")
+            if psop_id is not None and snapshot_id != psop_id:
+                raise ValueError("Explicit PSOP snapshot ID does not match requested ID")
+            if not isinstance(psop_snapshot.get("steps"), list):
+                raise ValueError("Explicit PSOP snapshot must contain a steps list")
+            # Use the SDK's actual wire parser; never fall back to another
+            # workflow when explicitly supplied execution metadata is invalid.
+            Workflow.from_dict(psop_snapshot)
+            return deepcopy(psop_snapshot)
 
-        psop_id = metadata.get("__orch_psop_id__")
-        if psop_id:
+        if psop_id is not None:
             logger.info(f"[HostAgent] Using psop_id from orchestration center: {psop_id}")
-            return await self._workflow_repository.get(psop_id)
+            workflow = await self._workflow_repository.get(psop_id)
+            loaded_id = workflow.get("id") if isinstance(workflow, dict) else getattr(workflow, "id", None)
+            if loaded_id != psop_id:
+                raise ValueError("Loaded PSOP ID does not match requested ID")
+            return workflow
 
         return await self._workflow_repository.find(intent)
 

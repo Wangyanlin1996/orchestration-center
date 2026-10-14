@@ -78,8 +78,8 @@ class IntentOrchestrateRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=256, description="Optional workflow name")
 
 class ExecuteRequest(BaseModel):
-    task: str = Field(..., min_length=1, max_length=10000, description="Task description. System will search existing PSOPs first, auto-generate if none found")
-    name: Optional[str] = Field(None, max_length=256, description="Optional workflow name for auto-generation")
+    task: str = Field(..., min_length=1, max_length=10000, description="Task description used to select an existing PSOP; this endpoint does not generate workflows. No match is reported through SSE error.")
+    name: Optional[str] = Field(None, max_length=256, deprecated=True, description="Deprecated compatibility input; ignored. To name a new workflow, use /orchestrate/intent instead.")
 
 class SearchRequest(BaseModel):
     intent: str = Field(..., min_length=1, max_length=10000, description="Natural language intent to search for matching workflows")
@@ -299,7 +299,7 @@ async def search_workflows(
         raise HTTPException(status_code=500, detail=f"Search failed: {e}") from e
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 5. Auto-orchestrate + execute (composite)
+# 5. Select an existing PSOP by intent and execute
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.post("/orchestrate/execute")
@@ -310,12 +310,15 @@ async def execute_workflow(
     _: Any = Depends(RateLimiter(config, "ext_execute_auto"))
 ):
     """
-    Auto-orchestrate and execute.
+    Select and execute an existing workflow by task description.
 
     Given a task description:
     1. Search for existing matching PSOPs
     2. If found, execute the best match
-    3. If not found, auto-generate a new PSOP then execute it
+    3. With the default Host, no match produces an SSE error, not generation.
+
+    To create a workflow, use /orchestrate/intent first, then execute its ID.
+    The deprecated name input is accepted for compatibility but has no effect.
 
     Returns an SSE stream with execution progress and results.
     """
@@ -359,6 +362,7 @@ async def execute_psop_by_id(
         intent = user_intent or psop.name or psop_id
         return await dispatch_intent_sse(
             await get_agent_cards(), intent, lang=lang, semaphore=execute_semaphore,
+            psop=psop,
         )
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")

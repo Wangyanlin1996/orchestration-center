@@ -50,6 +50,7 @@ sequenceDiagram
     participant BE as 后端 :5001<br/>(FastAPI)
     participant LLM as 大模型
     participant Reg as 注册中心
+    participant Host as Host Agent 执行宿主
     participant Agt as Agent 服务
 
     rect rgb(240, 248, 255)
@@ -101,31 +102,20 @@ sequenceDiagram
         Note over User, Agt: 4. 执行工作流
         User->>FE: 点击执行
         FE->>+BE: GET /rest/v1/orchestrate/execute<br/>?psop_id=xxx&user_intent=...&lang=zh
-        BE-->>FE: SSE: {"type":"init"}
-        BE-->>FE: SSE: {"type":"start"}
-        BE->>Reg: 获取 AgentCard 列表
+        BE->>Reg: 获取 AgentCard
         Reg-->>BE: AgentCard[]
-        loop 逐步骤执行（DAG 遍历）
-            BE->>BE: 构建上游上下文（context_from）
-            BE-->>FE: SSE: {"type":"agent_request",...}
-            BE->>+Agt: A2A 调用（gRPC/HTTP）<br/>task + context
-            Agt-->>-BE: Agent 响应
-            BE-->>FE: SSE: {"type":"agent_response",...}
-            opt A2A-T 协商
-                BE->>Agt: 协商请求
-                Agt-->>BE: 协商响应
-                BE-->>FE: SSE: {"type":"negotiation_request",...}
-                BE-->>FE: SSE: {"type":"negotiation_resolved",...}
-            end
-            opt 条件路由
-                BE->>LLM: 路由决策<br/>（JumpCondition 匹配）
-                LLM-->>BE: 下一步选择
-            end
+        BE->>BE: 捕获所选 PSOP 快照
+        BE->>Host: A2A-T 下发意图、PSOP ID 与快照
+        Note over Host: 校验快照；SDK 驱动其 DAG，不重新检索
+        loop 工作流步骤与任务
+            Host->>Agt: A2A/A2A-T 任务或协商
+            Agt-->>Host: 结果与状态
+            Host-->>BE: TaskUpdate metadata.__sdk_event__
+            BE-->>FE: SSE data: SDK 事件
         end
-        BE-->>FE: SSE: {"type":"psop_update",...}
-        BE->>BE: 保存执行记录
-        BE-->>FE: SSE: {"type":"complete",...}
-        BE-->>-FE: SSE: {"type":"close"}
+        BE->>BE: 保存有界事件尾部与最终状态
+        BE-->>FE: complete/error/cancelled 或异常 EOF
+        BE-->>-FE: 传输 EOF（不保证 close 事件）
         FE-->>User: 执行完成
     end
 ```
@@ -137,12 +127,12 @@ sequenceDiagram
 | **可视化编排** | 基于 React Flow 的拖拽式工作流设计器，支持自动 Dagre 布局 |
 | **多模式生成** | 支持 PDF 文档导入、手动拖拽编排、自然语言生成三种工作流创建方式 |
 | **A2A-T 协商集成** | workflow-engine 负责任务身份和交互生命周期，宿主回调使用当前 A2A-T 内容生成与校验接口完成业务决策 |
-| **执行引擎** | `OrchestrationEngine` — 薄 A2A-T 分发通道；PSOP 工作流执行委托给工作台智能体（workflow-engine SDK） |
+| **执行引擎** | `OrchestrationEngine` — 薄 A2A-T 分发通道；PSOP 工作流执行由 Host Agent（执行宿主）中的 workflow-engine SDK 承担 |
 | **语义检索** | 基于自然语言意图检索历史工作流，快速复用已有流程 |
 | **双 API 层** | 内部 API（`/rest/v1/orchestrate/*`）供前端调用 + 对外 API（`/api/v1/*`）供第三方集成 |
-| **SSE 流式推送** | 11 种事件类型（init、start、agent_request、agent_response、psop_update、negotiation_request、negotiation_resolved、negotiation_failed、complete、error、close）实时推送执行进度 |
+| **SSE 流式推送** | 推送执行阶段、SDK 任务/步骤/Agent 事件及 complete/error/cancelled 结果；详见 API 事件契约 |
 | **可插拔存储** | 文件 JSON、PostgreSQL 或 MySQL 持久化，通过 HandlerRegistry 切换 |
-| **模板市场** | 预置电信场景工作流模板（直播保障、节能、故障处理） |
+| **模板市场** | 内置跨城市 SPN 诊断模板；可在 samples/workflow_templates/ 中补充已审核模板 |
 | **示例 Agent** | 3 个示例 A2A Agent（Host Agent + 两个 SPN 域 Agent），用于测试和演示 |
 
 MySQL 配置、存储边界与容器启动步骤见 [MySQL 持久化配置](docs/zh/MySQL持久化配置.md)。
@@ -168,7 +158,10 @@ python3 -m venv .venv
 source .venv/bin/activate      # Linux
 # .venv\Scripts\activate       # Windows
 pip install -r requirements.txt
-python -m orchestrate.start    # 端口 5001
+# 首次配置：仅在 server.conf 不存在时复制公开模板，不覆盖本地配置。
+# 将 etc/config/models.yaml.example 复制为 models.yaml，填写模型/URL；密钥按名放入 .env。
+python generate_access_password.py  # 仅打印哈希，须手动写入 server.conf 的 access_password
+python -m orchestrate.start    # 端口 5001；HTTP 仍须登录
 
 # 前端启动（新终端）
 cd workflow-designer
@@ -221,7 +214,7 @@ flowchart TB
     domain --> engine
     engine --> file
     engine --> pg
-    engine -->|"A2A-T 协议"| wb["工作台智能体<br/>(Leader · workflow-engine SDK)"]
+    engine -->|"A2A-T 协议"| wb["Host Agent（执行宿主）<br/>(Leader · workflow-engine SDK)"]
     wb -->|"A2A 协议<br/>+ A2A-T 协商"| a1
     wb --> a2
     wb --> a3
@@ -261,14 +254,27 @@ flowchart TB
 | `POST` | `/retrieve-by-intent` | 按意图检索工作流 |
 | `POST` | `/retrieve-topn-by-intent` | 按意图检索 Top-N 工作流 |
 | `GET` | `/agent-cards` | 查询可用 Agent 列表 |
+| `GET` | `/solution-packages` / `/solution-packages/{pdf_filename}` | 方案包列表/详情 |
+| `DELETE` | `/solution-packages/{pdf_filename}` | 删除指定方案包，不是批量删除 |
+| `PUT` / `DELETE` | `/agent-cards/{organization}/{name}` | 管理员卡片写操作代理 |
+| `GET` | `/dispatch` | 必填 intent、agent_name，可选 lang；SSE |
 | `GET` | `/templates` | 查询工作流模板列表 |
 | `POST` | `/templates/{id}/import` | 从模板导入工作流 |
 | `GET` | `/execute` | 启动工作流执行（SSE 流式推送），参数：`psop_id`、`user_intent`、`lang` |
 | `GET` | `/execution-records` | 查询执行记录列表 |
 | `GET` | `/execution-records/{id}` | 获取执行记录详情 |
 | `DELETE` | `/execution-records/{id}` | 删除执行记录 |
+| `POST` | `/sandbox/{workflow_id}/run` | 沙箱验证/模板；详见 API 第 8 节 |
+| `GET` | `/sandbox/verifications` | 沙箱验证/模板；详见 API 第 8 节 |
+| `GET` | `/sandbox/verifications/{id}` | 沙箱验证/模板；详见 API 第 8 节 |
+| `GET` | `/sandbox/verifications/{id}/events` | 沙箱验证/模板；详见 API 第 8 节 |
+| `DELETE` | `/sandbox/verifications/{id}` | 沙箱验证/模板；详见 API 第 8 节 |
+| `GET` | `/sandbox/templates/{workflow_id}` | 沙箱验证/模板；详见 API 第 8 节 |
+| `PUT` | `/sandbox/templates/{workflow_id}` | 沙箱验证/模板；详见 API 第 8 节 |
 
 完整规范：[API 参考](docs/zh/编排中心API参考.md)
+
+按 ID 执行会将所选 PSOP ID 与独立快照下发给 Host Agent，不再按意图重新检索。`user_intent` 仅提供执行上下文，不改变工作流选择；快照捕获后的工作流编辑仅影响后续执行。详见 API 第 5 节。
 
 ## 安全
 
@@ -316,7 +322,7 @@ python generate_access_password.py
 | `ssl_certfile` | 服务器证书路径。 |
 | `ssl_keyfile` | 服务器私钥路径（加密存储）。 |
 | `ssl_ca_certs` | CA 信任库，用于校验客户端证书。 |
-| `client_verify_server` | 出站 HTTPS 调用（如访问注册中心）时是否校验对端证书。默认 `false`（向后兼容）。 |
+| `client_verify_server` | 出站 HTTPS 调用（如访问注册中心）时是否校验对端证书。公开模板及主服务工厂默认 `true`。 |
 
 生成自签名证书（RSA 3072，满足证书校验要求）：
 ```bash
@@ -385,7 +391,7 @@ HTTP 与 HTTPS 默认采用同样的账号认证。服务端 `verify_client=fals
 
 | 配置文件 | 用途 |
 |----------|------|
-| `etc/conf/server.conf` | 服务 IP、端口、TLS 证书、持久化模式、注册中心 URL, access password, client_verify_server |
+| `etc/conf/server.conf` | 服务 IP、端口、TLS 证书、持久化模式、注册中心地址、登录密码哈希、下游服务端证书校验策略 |
 | `etc/conf/server.properties` | TLS 密码套件、流控参数、连接限制 |
 | `etc/conf/db/postgresql.json` | PostgreSQL 连接配置——已加入 .gitignore；复制 `etc/conf/db/postgresql.json.template` 作为起点（仅 `persistence_mode=postgresql` 时需要） |
 | `etc/conf/db/mysql.json` | MySQL 连接配置——已加入 .gitignore；复制其 `.template`，通过 `MYSQL_PASSWORD` 注入密码，或全部使用环境变量；见 [MySQL 持久化配置](docs/zh/MySQL持久化配置.md) |
@@ -400,7 +406,7 @@ HTTP 与 HTTPS 默认采用同样的账号认证。服务端 `verify_client=fals
 
 ## A2A-T SDK 集成
 
-本项目集成了 workflow-engine SDK，用于工作台智能体的工作流执行和 fulfillment 协商。工作台业务代码
+本项目集成了 workflow-engine SDK，用于 Host Agent（执行宿主）的工作流执行和 fulfillment 协商。工作台业务代码
 使用 A2A-T SDK 的当前内容生成与校验接口，并从仓库根目录 `.env` 读取
 `A2AT_LLM_PROVIDER`、`A2AT_LLM_MODEL`、`A2AT_LLM_API_KEY`、`A2AT_LLM_BASE_URL`：
 
@@ -424,16 +430,33 @@ workflow-engine 不初始化已废弃的协商状态机。上述配置与上文�
 | [用户指南](docs/zh/用户指南.md) | 特性介绍、使用场景、快速入门、FAQ |
 | [API 参考](docs/zh/编排中心API参考.md) | 完整 REST API 规范 |
 | [开发指南](docs/zh/开发指南.md) | 自定义处理器、LLM 模块、扩展开发 |
-| [GCP 部署指南](docs/zh/编排中心GCP容器化部署指南.md) | Docker + GCP Cloud Run 部署指南 |
+| [GCP 部署指南](docs/zh/编排中心GCP容器化部署指南.md) | 历史 GCP 指南——当前一键入口不受支持 |
 | [设计文档](docs/DESIGN.md) | 系统架构与设计 |
 | [前端 README](workflow-designer/README.md) | 工作流设计器技术栈与开发 |
 | [LLM 配置](etc/config/README_zh.md) | LLM 配置文件说明 |
 
 > 英文文档请参见 [docs/en/](docs/en/)。
 
+数据库连接统一使用 `etc/conf/db/` 模板，密码由 `.env` / 环境变量引用；参见 [Database configuration / 数据库配置](docs/database-configuration.md)。旧连接配置不再作为运行时来源。
+
+## Host Agent 与沙箱边界
+
+编排中心负责工作流设计/存储和事件转发；Host Agent 是 SDK 执行宿主，负责业务回调和实际 DAG 执行。样例不是生产领域逻辑。Task-T 随单任务结束，Authorization-T 是一次性操作，Notification-T 通道独立且不随通知结果状态关闭，有心跳应保持，直到取消、异常断流或宿主关闭。
+
+沙箱通过 stub 回调验证工作流结构与业务样例，不代表真实 Agent、授权系统、模型或网络已可用。验证前准备 stub 模板，运行后检查报告与事件，取消/删除接口区分运行中取消和已完成报告删除。完整路径、请求体与状态见 [API 第 8 节](docs/zh/编排中心API参考.md#8-沙箱验证接口)。
+
+## 容器部署前置条件
+
+根目录 Compose 是本地部署基线，不是一条命令即可验收的生产方案。需先准备共享 `openan-net`、
+可访问的注册中心、`ORCH_ACCESS_PASSWORD` 哈希、`etc/config/models.yaml` 和其引用的环境秘密。
+文件不存在时复制公开模板，不覆盖现场配置；运行配置、证书和真实 `.env` 不进入镜像或 Git。
+根 Compose 默认后端 HTTP、注册中心 URL 为 `http://openan-registry-center:5000`，前端为
+`http://localhost:3003`；这不代表服务所有启动方式都默认 HTTP，也不表示免登录。
+`docker compose up -d --build` 前须核对端口、卷权限和注册中心独立 Token。
+dev overlay 的样例模型仍挂载 legacy 路径，使用新目录时显式设置 `LLM_CONFIG_HOST_FILE` 为现存 YAML 文件。
+HTTPS 需另配 SAN、CA、代理/探针与 mTLS 客户端身份，详见 [传输契约](docs/transport-runtime.md)。
+容器健康不等于真实模型、Agent 和工作流已验收。
+
 ## 许可证
 
 本项目基于 **Apache License 2.0** 开源协议。详见 [LICENSE](LICENSE)。
-
-
-数据库连接统一使用 `etc/conf/db/` 模板，密码由 `.env` / 环境变量引用；参见 [Database configuration / 数据库配置](docs/database-configuration.md)。旧连接配置不再作为运行时来源。
