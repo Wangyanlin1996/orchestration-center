@@ -41,6 +41,7 @@ CAPABILITY_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 MODEL_FIELDS = {
     "provider", "description", "model", "url", "api_key_env",
     "enable_thinking", "verify_ssl", "timeout", "auth",
+    "stream", "proxy", "stream_total_timeout", "extra_body",
 }
 AUTH_PUBLIC_FIELDS = {
     "api_code", "api_version", "scenario_code", "scenario_version",
@@ -224,7 +225,15 @@ def load_model_configs(
         timeout = raw.get("timeout", 60)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError(f"{selected}: {capability}.timeout must be positive")
-        for key in ("verify_ssl", "enable_thinking"):
+        stream_total_timeout = raw.get("stream_total_timeout", 600)
+        if isinstance(stream_total_timeout, bool) or not isinstance(stream_total_timeout, (int, float)) \
+                or not math.isfinite(stream_total_timeout) or stream_total_timeout <= 0:
+            raise ValueError(f"{selected}: {capability}.stream_total_timeout must be positive")
+        if "proxy" in raw and not isinstance(raw["proxy"], str):
+            raise ValueError(f"{selected}: {capability}.proxy must be a string")
+        if "extra_body" in raw and not isinstance(raw["extra_body"], dict):
+            raise ValueError(f"{selected}: {capability}.extra_body must be a mapping")
+        for key in ("verify_ssl", "enable_thinking", "stream"):
             if key in raw and not isinstance(raw[key], bool):
                 raise ValueError(f"{selected}: {capability}.{key} must be boolean")
         description = raw.get("description", capability)
@@ -235,6 +244,13 @@ def load_model_configs(
             "description": description, "model": model, "url": url, "api_key": api_key,
             "timeout": float(timeout), "verify_ssl": raw.get("verify_ssl", True),
             "enable_thinking": raw.get("enable_thinking", False),
+            "stream": raw.get("stream", False),
+            "proxy": raw.get("proxy", ""),
+            "stream_total_timeout": float(stream_total_timeout),
         })
+        # extra_body lets a deployment add provider-specific request fields
+        # (e.g. DeepSeek's effort/max_tokens) on top of the profile contract.
+        if raw.get("extra_body"):
+            config["body"] = {**config.get("body", {}), **raw["extra_body"]}
         result[capability] = config
     return result

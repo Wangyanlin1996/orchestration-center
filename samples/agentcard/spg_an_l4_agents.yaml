@@ -1,0 +1,502 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+# AN L4 AgentCard inventory covering all Autonomous Networks L4 solution
+# package (SPG) scenarios: fault management across every resource domain,
+# service assurance, complaint handling, service delivery, change management,
+# network planning & design, and optimization (quality / energy efficiency).
+#
+# These cards give the PsopGenerator's skill matcher a matching skill for the
+# tasks extracted from SPG "Interaction Flow" chapters, so that every SPG can
+# be orchestrated into a PSOP workflow.
+
+agents:
+  - name: "AN L4 Cross-Domain Fault Management Agent"
+    description: "负责跨域故障管理的自治闭环：接收单域Agent上报的事件，执行跨域关联分析、故障定界定位、协同修复与结果汇总。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "an-l4-fault-incident-receiving"
+        name: "Fault Incident Receiving and Distribution"
+        description: "接收单域Agent主动上报的故障事件或用户投诉，进行事件登记、去重与分发。"
+        tags: [ "fault-management", "cross-domain", "incident" ]
+      - id: "an-l4-cross-domain-correlation"
+        name: "Cross-Domain Fault Correlation Analysis"
+        description: "对来自多个单域Agent的事件与告警执行跨域关联分析，识别跨域故障并确定故障场景。"
+        tags: [ "fault-management", "cross-domain", "correlation" ]
+      - id: "an-l4-cross-domain-demarcation"
+        name: "Cross-Domain Fault Demarcation and Location"
+        description: "跨域故障定界定位，确定故障发生的站点、网元与链路，并返回定位结果。"
+        tags: [ "fault-management", "cross-domain", "diagnosis" ]
+      - id: "an-l4-cross-domain-repair"
+        name: "Cross-Domain Fault Coordination and Repair"
+        description: "协同资源层单域Agent执行故障自动修复，跟踪修复进展并汇总修复结果。"
+        tags: [ "fault-management", "cross-domain", "repair" ]
+      - id: "an-l4-fault-summary-report"
+        name: "Fault Management Summary Report"
+        description: "输出故障处理报告与效果评估，反馈故障管理闭环结果。"
+        tags: [ "fault-management", "reporting" ]
+      - id: "general-orchestration-support"
+        name: "General Orchestration Support"
+        description: "通用编排支撑：承接流程中难以归入具体专业能力的辅助性任务，如事件驱动触发、跨Agent消息中转、辅助执行与结果传递。"
+        tags: [ "orchestration", "support", "generic" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9101"
+
+  - name: "Mobile Network Fault Management Agent"
+    description: "负责移动网络（无线接入网）域内故障的自动识别、诊断与处理，支持与跨域故障管理Agent协同。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "mobile-network-fault-identification"
+        name: "Mobile Network Fault Identification"
+        description: "基于告警与性能数据自动识别移动网络（无线网络）域内故障。"
+        tags: [ "fault-management", "mobile-network", "wireless" ]
+      - id: "mobile-network-fault-diagnosis"
+        name: "Mobile Network Fault Diagnosis"
+        description: "对移动网络故障执行根因分析与自动诊断，输出诊断信息与处理建议。"
+        tags: [ "fault-management", "mobile-network", "diagnosis" ]
+      - id: "mobile-network-fault-handling"
+        name: "Mobile Network Fault Handling"
+        description: "执行移动网络故障的自动处理与修复，无法自动修复时上报跨域Agent或派发工单。"
+        tags: [ "fault-management", "mobile-network", "repair" ]
+      - id: "wireless-network-fault-management"
+        name: "Wireless Network Fault Management"
+        description: "无线网络专项故障管理，覆盖基站、小区与无线链路类故障。"
+        tags: [ "fault-management", "wireless" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9102"
+
+  - name: "Core Network Fault Management Agent"
+    description: "负责核心网域内故障的自动识别、诊断与处理，支持变更期间的故障监控与跨域协同。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "core-network-fault-identification"
+        name: "Core Network Fault Identification"
+        description: "基于告警、信令与KPI数据自动识别核心网域内故障。"
+        tags: [ "fault-management", "core-network" ]
+      - id: "core-network-fault-diagnosis"
+        name: "Core Network Fault Diagnosis"
+        description: "对核心网故障执行根因定位与自动诊断，输出诊断报告。"
+        tags: [ "fault-management", "core-network", "diagnosis" ]
+      - id: "core-network-fault-handling"
+        name: "Core Network Fault Handling"
+        description: "执行核心网故障自动处理，必要时协同变更管理或派发人工工单。"
+        tags: [ "fault-management", "core-network", "repair" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9103"
+
+  - name: "IP Network Fault Management Agent"
+    description: "负责IP网络（数据通信网）域内故障的自动识别、诊断与处理。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "ip-network-fault-identification"
+        name: "IP Network Fault Identification"
+        description: "基于链路状态与告警数据自动识别IP网络域内故障。"
+        tags: [ "fault-management", "ip-network" ]
+      - id: "ip-network-fault-diagnosis"
+        name: "IP Network Fault Diagnosis"
+        description: "对IP网络故障执行路径分析与根因诊断，输出诊断信息。"
+        tags: [ "fault-management", "ip-network", "diagnosis" ]
+      - id: "ip-network-fault-handling"
+        name: "IP Network Fault Handling"
+        description: "执行IP网络故障的自动处理与流量倒换验证。"
+        tags: [ "fault-management", "ip-network", "repair" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9104"
+
+  - name: "Transport Network Fault Management Agent"
+    description: "负责承载网（SPN/OTN/传输网）域内故障的自动识别、诊断与处理。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "transport-network-fault-identification"
+        name: "Transport Network Fault Identification"
+        description: "基于波长/隧道/链路告警自动识别承载网域内故障。"
+        tags: [ "fault-management", "transport-network", "spn" ]
+      - id: "transport-network-fault-diagnosis"
+        name: "Transport Network Fault Diagnosis"
+        description: "对承载网故障执行端到端路径分析与根因定位。"
+        tags: [ "fault-management", "transport-network", "diagnosis" ]
+      - id: "transport-network-fault-handling"
+        name: "Transport Network Fault Handling"
+        description: "执行承载网故障的自动倒换与修复处理。"
+        tags: [ "fault-management", "transport-network", "repair" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9105"
+
+  - name: "Fixed Access Network Fault Management Agent"
+    description: "负责固网接入（FTTH/xDSL）域内故障的自动识别、诊断与处理。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "fixed-access-fault-identification"
+        name: "Fixed Access Network Fault Identification"
+        description: "基于ONU/OLT告警与拨测数据自动识别固网接入域内故障。"
+        tags: [ "fault-management", "fixed-access" ]
+      - id: "fixed-access-fault-diagnosis"
+        name: "Fixed Access Network Fault Diagnosis"
+        description: "对固网接入故障执行线路诊断与根因定位。"
+        tags: [ "fault-management", "fixed-access", "diagnosis" ]
+      - id: "fixed-access-fault-handling"
+        name: "Fixed Access Network Fault Handling"
+        description: "执行固网接入故障的自动处理与远程重启修复。"
+        tags: [ "fault-management", "fixed-access", "repair" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9106"
+
+  - name: "Computing Network Fault Management Agent"
+    description: "负责算力网络域内故障的自动识别、诊断与处理，覆盖云化网元与算力基础设施。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "computing-network-fault-identification"
+        name: "Computing Network Fault Identification"
+        description: "自动识别算力网络域内的网元与基础设施故障。"
+        tags: [ "fault-management", "computing-network" ]
+      - id: "computing-network-fault-diagnosis"
+        name: "Computing Network Fault Diagnosis"
+        description: "对算力网络故障执行根因分析与诊断。"
+        tags: [ "fault-management", "computing-network", "diagnosis" ]
+      - id: "computing-network-fault-handling"
+        name: "Computing Network Fault Handling"
+        description: "执行算力网络故障的自动修复与资源调度调整。"
+        tags: [ "fault-management", "computing-network", "repair" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9107"
+
+  - name: "Service Assurance Agent"
+    description: "面向个人/家庭/政企服务的端到端质量保障：质差感知、根因分析、保障策略执行与报告。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "service-quality-monitoring"
+        name: "Service Quality Monitoring"
+        description: "持续监控用户级与业务级服务质量指标，发现质差用户与质差业务。"
+        tags: [ "service-assurance", "monitoring" ]
+      - id: "service-assurance-analysis"
+        name: "Service Assurance Root Cause Analysis"
+        description: "对质差服务执行端到端根因分析，定位影响服务的网络环节。"
+        tags: [ "service-assurance", "analysis" ]
+      - id: "service-assurance-remediation"
+        name: "Service Assurance Remediation"
+        description: "执行服务保障策略（加速、调度、修复）并验证保障效果。"
+        tags: [ "service-assurance", "remediation" ]
+      - id: "service-assurance-reporting"
+        name: "Service Assurance Reporting"
+        description: "输出服务保障报告、达成率评估与优化建议。"
+        tags: [ "service-assurance", "reporting" ]
+      - id: "enterprise-private-line-assurance"
+        name: "Enterprise Private Line Assurance"
+        description: "政企专线业务保障：专线SLA监控、故障发现与保障处理。"
+        tags: [ "service-assurance", "private-line", "enterprise" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9108"
+
+  - name: "Service Delivery Agent"
+    description: "面向个人移动业务的自动开通与交付：业务订单受理、开通编排、交付验证与激活。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "service-order-intake"
+        name: "Service Order Intake"
+        description: "受理个人移动业务开通订单，进行订单解析与合法性校验。"
+        tags: [ "service-delivery", "order" ]
+      - id: "service-provisioning-orchestration"
+        name: "Service Provisioning Orchestration"
+        description: "编排各网域执行业务开通配置与参数下发。"
+        tags: [ "service-delivery", "provisioning" ]
+      - id: "service-delivery-verification"
+        name: "Service Delivery Verification and Activation"
+        description: "执行业务交付验证（拨测/签约核查）并完成业务激活。"
+        tags: [ "service-delivery", "verification" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9109"
+
+  - name: "Complaint Handling Agent"
+    description: "面向个人/家庭宽带投诉的端到端处理：投诉受理、智能定界、根因分析、处理闭环与回访。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "complaint-intake"
+        name: "Complaint Intake and Classification"
+        description: "受理用户投诉，进行投诉分类、工单化与优先级评估。"
+        tags: [ "complaint-handling", "intake" ]
+      - id: "complaint-root-cause-analysis"
+        name: "Complaint Root Cause Analysis"
+        description: "结合用户画像与网络数据执行投诉根因分析与智能定界。"
+        tags: [ "complaint-handling", "analysis" ]
+      - id: "complaint-resolution"
+        name: "Complaint Resolution and Closure"
+        description: "执行投诉处理方案并验证恢复效果，完成投诉闭环与回复。"
+        tags: [ "complaint-handling", "resolution" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9110"
+
+  - name: "Network Change Management Agent"
+    description: "负责核心网等网域的变更管理：变更评估、变更方案执行、变更验证与回退。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "change-assessment"
+        name: "Change Assessment and Approval"
+        description: "执行变更影响评估、风险分析与变更方案审批流转。"
+        tags: [ "change-management", "assessment" ]
+      - id: "change-implementation"
+        name: "Change Implementation"
+        description: "按变更方案执行配置实施与变更窗口控制。"
+        tags: [ "change-management", "implementation" ]
+      - id: "change-verification"
+        name: "Change Verification and Rollback"
+        description: "变更后业务验证与KPI观察，异常时执行变更回退。"
+        tags: [ "change-management", "verification" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9111"
+
+  - name: "Network Planning and Design Agent"
+    description: "负责固网接入等网络的规划与设计：需求分析、覆盖与容量规划、方案设计与评审。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "network-planning-requirements"
+        name: "Network Planning Requirements Analysis"
+        description: "分析业务发展需求与现状数据，输出规划需求与目标。"
+        tags: [ "planning-design", "requirements" ]
+      - id: "fixed-access-network-planning"
+        name: "Fixed Access Network Planning and Design"
+        description: "执行固网接入网的覆盖、容量与拓扑规划设计，输出设计方案。"
+        tags: [ "planning-design", "fixed-access" ]
+      - id: "network-design-review"
+        name: "Network Design Review and Evaluation"
+        description: "对网络设计方案进行评审与投资效益评估。"
+        tags: [ "planning-design", "review" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9112"
+
+  - name: "Network Optimization Agent"
+    description: "负责网络质量优化与节能优化：IP网络质量优化、无线网络节能与效能评估。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "ip-network-quality-optimization"
+        name: "IP Network Quality Optimization"
+        description: "执行IP网络质量分析、优化策略生成与下发及效果验证。"
+        tags: [ "optimization", "ip-network", "quality" ]
+      - id: "wireless-energy-efficiency-optimization"
+        name: "Wireless Energy Efficiency Optimization"
+        description: "执行无线网络节能策略生成与下发，平衡能耗与KPI。"
+        tags: [ "optimization", "wireless", "energy-saving" ]
+      - id: "energy-efficiency-evaluation"
+        name: "Energy Efficiency Evaluation and Reporting"
+        description: "评估节能效果，输出能耗报告与优化建议。"
+        tags: [ "optimization", "energy-saving", "reporting" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9113"
+
+  - name: "Work Order Management Agent"
+    description: "负责工单全生命周期管理：工单创建、派发、跟踪与关闭，支撑无法自动修复场景的人工处置。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "work-order-creation"
+        name: "Work Order Creation"
+        description: "根据故障或投诉处理需要创建人工处置工单。"
+        tags: [ "work-order", "creation" ]
+      - id: "work-order-dispatch"
+        name: "Work Order Dispatch"
+        description: "将工单派发到对应作业班组（如FME）并跟踪接单。"
+        tags: [ "work-order", "dispatch" ]
+      - id: "work-order-tracking"
+        name: "Work Order Tracking and Closure"
+        description: "跟踪工单处理进展并在处理完成后关闭工单、归档结果。"
+        tags: [ "work-order", "tracking" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9114"
+
+  - name: "Field Maintenance Copilot Agent"
+    description: "面向现场维护（FME）的Copilot能力：设备信息查询、故障知识检索与自然语言作业指导。"
+    provider:
+      organization: "Huawei"
+      url: ""
+    version: "1.0.0"
+    iconUrl: ""
+    skills:
+      - id: "device-information-query"
+        name: "Device Information Query"
+        description: "查询故障设备的资产信息、板卡状态与历史告警。"
+        tags: [ "copilot", "fme", "query" ]
+      - id: "fault-knowledge-retrieval"
+        name: "Fault Knowledge Retrieval"
+        description: "检索故障案例库与知识库，输出处理建议与参考案例。"
+        tags: [ "copilot", "fme", "knowledge" ]
+      - id: "copilot-collaboration"
+        name: "Copilot Collaboration"
+        description: "作为服务层或资源层FME Copilot与其他层Copilot协同工作，转发上下文、交换查询结果并汇总双方输出。"
+        tags: [ "copilot", "fme", "collaboration" ]
+      - id: "operational-guidance"
+        name: "Natural Language Operational Guidance"
+        description: "以自然语言为现场维护人员提供故障修复作业指导。"
+        tags: [ "copilot", "fme", "guidance" ]
+    capabilities:
+      pushNotifications: false
+      streaming: false
+    defaultInputModes: [ "text" ]
+    defaultOutputModes: [ "text" ]
+    supportedInterfaces:
+      - protocolBinding: "HTTP+JSON"
+        protocolVersion: "1.0"
+        url: "http://127.0.0.1:9115"

@@ -52,6 +52,13 @@ class WorkflowGeneratorError(Exception):
     """
     pass
 
+
+# Skill used as deterministic fallback for actions that the LLM cannot match
+# to any specific capability ("none"). Declared in the AgentCard catalog as
+# "General Orchestration Support" so every SPG flow stays orchestratable.
+FALLBACK_SKILL_NAME = "General Orchestration Support"
+
+
 class PsopGenerator:
     """Main class for generating PSOP workflows from PreFlow inputs.
 
@@ -224,8 +231,24 @@ class PsopGenerator:
             step_list = []
             missing_skills = []
             unmatched_actions = []
+            fallback_agent = skill_dict.get(FALLBACK_SKILL_NAME)
             for action, skill_name in action_skill_pair.items():
                 if skill_name not in skill_dict:
+                    if skill_name == "none" and fallback_agent is not None:
+                        # Deterministic fallback: route unmatchable helper tasks
+                        # to the generic orchestration-support skill so that
+                        # every SPG flow can still be orchestrated end to end.
+                        logger.warning(
+                            f"Action '{action}' matched no skill; "
+                            f"falling back to '{FALLBACK_SKILL_NAME}' "
+                            f"(agent '{fallback_agent}')"
+                        )
+                        step_list.append({
+                            'task': action,
+                            'skill': FALLBACK_SKILL_NAME,
+                            'agent': fallback_agent
+                        })
+                        continue
                     logger.warning(f"Skill '{skill_name}' not found in any agent's skill list")
                     if skill_name == "none":
                         unmatched_actions.append(action)
@@ -249,6 +272,7 @@ class PsopGenerator:
                 raise WorkflowGeneratorError("No valid tasks generated from PSOP")
 
             psop: PSOP = self.build_psop_structure(preflow, step_list)
+            self._normalize_subtask_agents(psop, skill_dict)
             psop.name = preflow.name
             psop.related_preflow = preflow.id
 
@@ -258,3 +282,24 @@ class PsopGenerator:
         except Exception as e:
             logger.error(f"Unexpected error during PSOP generation: {e}")
             raise WorkflowGeneratorError(f"Unexpected error: {e}") from e
+
+    @staticmethod
+    def _normalize_subtask_agents(psop: PSOP, skill_dict: Dict[str, str]) -> None:
+        """Align every subtask's agent with the skill→agent mapping.
+
+        The structure-building LLM occasionally invents agent names (e.g. a
+        'Ticket System' actor taken from the SPG narrative). Executing such a
+        PSOP would fail because no registered agent carries that name, so any
+        subtask whose skill exists in the catalog gets its agent rewritten to
+        the agent that actually owns the skill.
+        """
+        for step in psop.steps:
+            for task in step.subtasks:
+                owner = skill_dict.get(task.skill)
+                if owner and task.agent != owner:
+                    logger.warning(
+                        f"Subtask '{task.description[:60]}' named agent "
+                        f"'{task.agent}' but skill '{task.skill}' belongs to "
+                        f"'{owner}'; normalizing"
+                    )
+                    task.agent = owner

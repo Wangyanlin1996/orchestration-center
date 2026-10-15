@@ -1,0 +1,365 @@
+{
+  "id": "5edfbd9a-f3bb-42e7-bb44-b262bdee55f5",
+  "name": "IG1524B_AN_L4_Core_Network_Change_Management_Solution_Package",
+  "description": "Auto-generated from SPG IG1524B_AN_L4_Core_Network_Change_Management_Solution_Package.pdf, chapter '5. Interaction Flow'",
+  "created_at": "2026-10-15T07:20:13.188864Z",
+  "steps": [
+    {
+      "name": "step1",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "b104b405-50a8-496d-b292-df0023ba45ec",
+          "description": "Send the network change ticket to the Network Change Management Center.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Assessment and Approval",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step2",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step2",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "b0cf5b75-7aae-4996-8a8f-2ed397895419",
+          "description": "Parse the intent of the core network change ticket using LLMs and forward an automatic change requirement to the Core Network Change Management Agent.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Assessment and Approval",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step3",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "d2598bf7-7477-468d-abb1-94a1be6daf19",
+          "description": "Automatically collect the current configuration of core network elements and other relevant information.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Assessment and Approval",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step4",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step4",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "dc5a27e8-6b25-4d4f-8509-2e31939d5fba",
+          "description": "Generate core network change solutions and evaluate them using machine learning on historical data or a digital twin system for the core network.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Assessment and Approval",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step5",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step5",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "dab6d417-cef6-45f7-860c-f0e40699c72c",
+          "description": "Return information, change solutions, and evaluation results to the Network Change Management Center.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Assessment and Approval",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step6",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step6",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "195b8798-f012-4ad9-a999-15b470d2346d",
+          "description": "Seek engineer confirmation or autonomously decide whether to implement the change, and send approval to the Core Network Change Management Agent if approved.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Assessment and Approval",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step7",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step7",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "cb8c0eba-11f7-425f-a99d-1acc22908401",
+          "description": "Verify network normality before change, including backup, dial-up, and inspection.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Implementation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step8",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "ef42e836-ca23-4c88-87ec-386387cd031d",
+          "description": "Automatically execute the change solution while continuously querying and collecting network status information, including network element performance, alarms, complaints, billing data, and dial-up testing results.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Implementation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step9",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step9",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "096cf417-cc14-4cd3-9064-f44e34e14073",
+          "description": "Report network status information to the Network Change Management Center.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Implementation",
+          "status": "pending"
+        },
+        {
+          "task_id": "0dd5a624-0af5-40f3-9338-3caa6c08fccf",
+          "description": "Monitor the network status information throughout the change process.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Implementation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step10",
+          "condition": "Anomaly detected during change"
+        },
+        {
+          "step": "step12",
+          "condition": "No anomaly detected during change"
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step10",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "4a85edc2-1d0b-4dc0-9c27-ea3fd5b9f496",
+          "description": "If anomalies occur during the change, send the command of roll back or disaster recovery to the Core Network Change Management Agent.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Verification and Rollback",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step11",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step11",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "bcbd4539-7212-469b-819f-00e62bc08467",
+          "description": "Stop the change and activate automatic roll back or automatic disaster recovery upon receiving the command of roll back or disaster recovery.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Verification and Rollback",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step12",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step12",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "3f44f2ae-1393-47fe-839b-632913474113",
+          "description": "Execute service verification upon change, roll back, or disaster recovery completion.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Verification and Rollback",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step13",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step13",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "65970872-a2e3-4935-b139-ecdc6c02eeda",
+          "description": "Report service verification results to the Network Change Management Center.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Verification and Rollback",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step14",
+          "condition": "Anomaly detected in service verification"
+        },
+        {
+          "step": "step16",
+          "condition": "No anomaly detected in service verification"
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step14",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "3685dec3-7b46-4b8d-acbe-8b0699c77e30",
+          "description": "If anomalies occur in the service verification results, send the command of roll back or disaster recovery to the Core Network Change Management Agent.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Verification and Rollback",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step15",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step15",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "efc39d8b-46b5-47b2-acb1-edbedb760891",
+          "description": "Activate automatic roll back or automatic disaster recovery upon receiving the command of roll back or disaster recovery.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Verification and Rollback",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step16",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step16",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "1fddd55f-fe43-471c-91f3-913705f2f30c",
+          "description": "Report the ticket execution results to the Ticket System to close the ticket.",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Verification and Rollback",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    }
+  ],
+  "related_preflow": "40983b60-1376-495e-b69c-316bfd8db7da",
+  "user_intent": "# 5. Interaction Flow\n\n## 5.1. AN L4 Core Network Change Management Workflow\n\n[Figure: AN L4 Core Network Change Management Workflow diagram. Swimlanes/actors: Service Operation, Network Change Manage",
+  "tags": [
+    "spg",
+    "solution-package"
+  ]
+}

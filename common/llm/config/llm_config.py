@@ -31,6 +31,9 @@ class ModelConfig:
     headers: Dict[str, str] = field(default_factory=dict)
     body: Dict[str, Any] = field(default_factory=dict)
     response: Dict[str, str] = field(default_factory=dict)
+    stream: bool = False
+    proxy: str = ""
+    stream_total_timeout: float = 600.0
 
     @staticmethod
     def from_dict(key: str, raw: dict) -> "ModelConfig":
@@ -46,6 +49,9 @@ class ModelConfig:
             headers=raw.get("headers", {}),
             body=raw.get("body", {}),
             response=raw.get("response", {}),
+            stream=bool(raw.get("stream", False)),
+            proxy=raw.get("proxy", ""),
+            stream_total_timeout=float(raw.get("stream_total_timeout", 600.0)),
         )
 
 class _ModelConfigHolder:

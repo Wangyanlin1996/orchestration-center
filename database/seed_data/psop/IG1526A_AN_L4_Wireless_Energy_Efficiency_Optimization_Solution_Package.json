@@ -1,0 +1,203 @@
+{
+  "id": "a390eb76-b0d5-4731-ac22-7f097fdb974c",
+  "name": "IG1526A_AN_L4_Wireless_Energy_Efficiency_Optimization_Solution_Package",
+  "description": "Auto-generated from SPG IG1526A_AN_L4_Wireless_Energy_Efficiency_Optimization_Solution_Package.pdf, chapter '5. Interaction Flow'",
+  "created_at": "2026-10-15T07:25:34.111542Z",
+  "steps": [
+    {
+      "name": "step1",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "1ef77b9b-3be3-4074-b922-340f1eb4a56a",
+          "description": "Request RAN ES Intent Exploration to explore best values for RAN ES Intent targets (RAN Energy consumption target and RAN UE throughput)",
+          "agent": "Energy Saving Intent Agent",
+          "skill": "Intent Exploration Request",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step2",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step2",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "1121115a-875d-4eee-b802-9295d03db8e3",
+          "description": "Evaluate and determine best possible values for specified RAN ES Intent targets considering current resource situation and system capabilities",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Exploration",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step3",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "32946bdd-2851-4206-9bf3-ebbd2cd7f60a",
+          "description": "Obtain RAN ES exploration report containing best possible values for targets required in Step 1",
+          "agent": "Energy Saving Intent Agent",
+          "skill": "Intent Exploration Request",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step4",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step4",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "e9d2aa57-3c70-47c3-9bf5-3c9de4510ab8",
+          "description": "Generate RAN Energy Saving Intent content based on RAN ES exploration report and operator's business requirements, assigning different RAN UE throughput and RAN Energy Saving targets for different frequencies or RATs and time periods",
+          "agent": "Energy Saving Intent Agent",
+          "skill": "Intent Generation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step5",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step5",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "df3092e4-10af-4219-8373-a9b54b678b23",
+          "description": "Request delivery of RAN ES intent",
+          "agent": "Energy Saving Intent Agent",
+          "skill": "Intent Delivery",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step6",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step6",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "3ed72eaa-8d64-45b1-9b81-5f28eb28d896",
+          "description": "Fulfill RAN ES intent through RAN ES data collection, RAN ES analysis, solution formulation and execution, including configuring RAN ES policies and actions for corresponding RAN NEs",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Lifecycle Management",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step7",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step7",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "84144320-23fa-4d96-9d50-093cc4c4758d",
+          "description": "Evaluate RAN ES effect and generate RAN ES intent fulfillment report including intent fulfillment status, achieved value, recommended values for corresponding intent targets, and RAN NE configuration modification information",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Reporting",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step8",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "b6d98707-0a61-4ae2-8740-3a8605de6a1c",
+          "description": "Obtain RAN ES intent fulfillment report",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Reporting",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step9",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step9",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "7566ddda-7a28-4e05-88e4-6fdfd91384ce",
+          "description": "Evaluate Energy Saving effect for different RAN domains and adjust RAN ES intent based on evaluation result",
+          "agent": "Energy Saving Intent Agent",
+          "skill": "Effect Evaluation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    }
+  ],
+  "related_preflow": "8f36bc56-8c63-4d2b-a985-f2a7ca336617",
+  "user_intent": "# 5. Interaction Flow\n\nBased on the above functional architecture and the integration model of Agent/Copilot, this chapter focuses on how to achieve end-to-end processing of the Wireless Energy effici",
+  "tags": [
+    "spg",
+    "solution-package"
+  ]
+}

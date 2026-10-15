@@ -15,6 +15,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import re
+
 import fitz
 from loguru import logger
 from pathlib import Path
@@ -50,6 +52,47 @@ class SolutionPackageParser:
                 start = page
             elif start is not None and level <= 1:
                 end = page
+                break
+        return start, end
+
+    @staticmethod
+    def _normalize_chapter_title(title: str) -> str:
+        """Strip leading chapter numbering ('6.', '5.3.', '10.2.') and lowercase."""
+        return re.sub(r'^\s*\d+(?:\.\d+)*\.?\s*', '', title or '').strip().lower()
+
+    @staticmethod
+    def find_chapter_range_fuzzy(doc, chapter_title: str) -> tuple:
+        """Locate a chapter by topic name, tolerating numbering differences.
+
+        SPG documents are not consistent about where the 'Interaction Flow'
+        chapter is numbered: most number it as chapter 5, but documents that
+        carry an extra 'Introduction' chapter number it as chapter 6. This
+        matcher strips the leading numbering from every TOC title and matches
+        the remaining topic text (case-insensitive, exact match first, then
+        substring containment).
+        """
+        topic = SolutionPackageParser._normalize_chapter_title(chapter_title)
+        if not topic:
+            return None, None
+        toc = doc.get_toc()
+        match_index = None
+        for i, (level, title, _page) in enumerate(toc):
+            if SolutionPackageParser._normalize_chapter_title(title) == topic:
+                match_index = i
+                break
+        if match_index is None:
+            for i, (level, title, _page) in enumerate(toc):
+                if topic in SolutionPackageParser._normalize_chapter_title(title):
+                    match_index = i
+                    break
+        if match_index is None:
+            return None, None
+        level, _title, start = toc[match_index]
+        end = doc.page_count
+        for j in range(match_index + 1, len(toc)):
+            next_level, _, next_page = toc[j]
+            if next_level <= level:
+                end = next_page
                 break
         return start, end
 
@@ -108,6 +151,10 @@ The text to convert is below:
             raise PDFParsingError(f"Cannot open pdf file: {e}") from e
         try:
             start, end = self.find_chapter_range(doc, chapter_title)
+            if start is None:
+                # Numbering-agnostic fallback: some SPGs shift chapter numbers
+                # (e.g. '6. Interaction Flow' instead of '5. Interaction Flow').
+                start, end = self.find_chapter_range_fuzzy(doc, chapter_title)
             if start is None:
                 raise ChapterNotFoundError(f"Chapter not found: {chapter_title}")
             return self.extract_text(doc, start, end)

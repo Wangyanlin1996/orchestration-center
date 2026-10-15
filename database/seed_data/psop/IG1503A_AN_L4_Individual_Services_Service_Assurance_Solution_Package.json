@@ -1,0 +1,182 @@
+{
+  "id": "3b984a28-1765-4905-afee-2ca3f99241d7",
+  "name": "IG1503A_AN_L4_Individual_Services_Service_Assurance_Solution_Package",
+  "description": "Auto-generated from SPG IG1503A_AN_L4_Individual_Services_Service_Assurance_Solution_Package.pdf, chapter '5. Interaction Flow'",
+  "created_at": "2026-10-15T06:42:29.307870Z",
+  "steps": [
+    {
+      "name": "step1",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "09fbf1d0-f0bf-4899-9efb-eb929452fabc",
+          "description": "Report performance KPIs and QoE indicators to the Service Assurance Agent",
+          "agent": "Live Streaming Agent",
+          "skill": "KQI Monitoring",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step2",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step2",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "70d70f24-fe8d-43b3-9bcf-1a44bea3d504",
+          "description": "Identify poor QoE",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Quality Monitoring",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step3",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "954c963b-0b3d-46ef-842b-bab385cafc90",
+          "description": "Correlate relevant KPIs and faults",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Assurance Root Cause Analysis",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step4",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step4",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "4dadd1fa-5eff-4eb6-8371-41334f1cda9d",
+          "description": "Perform automated diagnosis to generate potential optimization solutions",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Assurance Root Cause Analysis",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step5",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step5",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "b35f2647-99c1-487b-bfe5-fa9aeea1af46",
+          "description": "Formulate recommendations with associated KPIs and root cause information",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Assurance Reporting",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step6",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step6",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "ba2ccbea-ae0d-44f4-83cd-111c9b8337e1",
+          "description": "Report recommendations to the orchestration layer and ticket management systems for traceability",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Assurance Reporting",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step7",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step7",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "7061bc23-bccd-4994-a983-d03edf89f56f",
+          "description": "Trigger corrective actions",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Assurance Remediation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step8",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "f72cc762-17ea-4279-abcf-43bb1f0c86d2",
+          "description": "Execute network changes on NE via network change agent",
+          "agent": "Network Change Management Agent",
+          "skill": "Change Implementation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    }
+  ],
+  "related_preflow": "7c05428e-1959-4a26-903b-c90bf2278d3f",
+  "user_intent": "# 5. Interaction Flow\n\nThe interaction flow for Individual Service Assurance follows the IAADE sequence (Perception, Analysis, Decision, Execution). Functional modules exchange KPIs, events, and recom",
+  "tags": [
+    "spg",
+    "solution-package"
+  ]
+}

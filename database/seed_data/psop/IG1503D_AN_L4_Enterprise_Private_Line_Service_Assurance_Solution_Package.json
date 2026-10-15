@@ -1,0 +1,229 @@
+{
+  "id": "1fc11f56-d51e-4e04-a474-8eb4d771c540",
+  "name": "IG1503D_AN_L4_Enterprise_Private_Line_Service_Assurance_Solution_Package",
+  "description": "Auto-generated from SPG IG1503D_AN_L4_Enterprise_Private_Line_Service_Assurance_Solution_Package.pdf, chapter '5. Interaction Flow'",
+  "created_at": "2026-10-15T06:49:13.489112Z",
+  "steps": [
+    {
+      "name": "step1",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task1",
+          "description": "Fault or risk detection",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Quality Monitoring",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step2",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step2",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task2",
+          "description": "Automated diagnostics",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Assurance Root Cause Analysis",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step3_self",
+          "condition": "Self-remediable issue detected"
+        },
+        {
+          "step": "step3_workorder",
+          "condition": "Requires remote or on-site resolution"
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3_self",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task3",
+          "description": "Automatic reporting of closed-loop enterprise PL faults/risks (Issue description, Auto-handling result)",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Assurance Reporting",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8_noc",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3_workorder",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task4",
+          "description": "Enterprise PL faults/risks requiring on-site repair or remote operation (Issue description, Diagnostic result, Issue resolution recommendation)",
+          "agent": "Work Order Management Agent",
+          "skill": "Work Order Creation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step4_remote",
+          "condition": "Remote operation required"
+        },
+        {
+          "step": "step5_expansion",
+          "condition": "On-site repair with network expansion required"
+        },
+        {
+          "step": "step6_direct",
+          "condition": "On-site repair without network expansion required"
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step4_remote",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task5",
+          "description": "Remotely instruct Enterprise PL Service Assurance Agent in Network Layer to execute all or part of the risk or fault resolution plan",
+          "agent": "Service Assurance Agent",
+          "skill": "Service Assurance Remediation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8_noc",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step5_expansion",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task7",
+          "description": "Invoke network planning system to create expansion plan and issue work order to FME",
+          "agent": "Network Planning and Design Agent",
+          "skill": "Fixed Access Network Planning and Design",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step7_fme_guidance",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step6_direct",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task6",
+          "description": "Assign work order directly to FME for on-site repair operations",
+          "agent": "Work Order Management Agent",
+          "skill": "Work Order Dispatch",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step7_fme_guidance",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step7_fme_guidance",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task8",
+          "description": "FME uses Copilot to receive guided instructions for on-site operations",
+          "agent": "Field Maintenance Copilot Agent",
+          "skill": "Natural Language Operational Guidance",
+          "status": "pending"
+        },
+        {
+          "task_id": "task9",
+          "description": "Copilot Q&A interaction (FME, Intelligent Q&A messages)",
+          "agent": "Field Maintenance Copilot Agent",
+          "skill": "Fault Knowledge Retrieval",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8_noc",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step8_noc",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task10",
+          "description": "Proactively query specific service fault or risk information via natural language interaction",
+          "agent": "Field Maintenance Copilot Agent",
+          "skill": "Fault Knowledge Retrieval",
+          "status": "pending"
+        },
+        {
+          "task_id": "task11",
+          "description": "Copilot Q&A interaction (NOC, Intelligent Q&A messages)",
+          "agent": "Field Maintenance Copilot Agent",
+          "skill": "Fault Knowledge Retrieval",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    }
+  ],
+  "related_preflow": "1fcc9f9a-b3b3-4216-9eed-b92155771fd5",
+  "user_intent": "# 5. Interaction Flow\n\nBased on the above functional architecture and the integration model of Agent/Copilot, this section focuses on how to enable end-to-end handling of service assurance scenarios, ",
+  "tags": [
+    "spg",
+    "solution-package"
+  ]
+}

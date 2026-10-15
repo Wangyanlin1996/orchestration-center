@@ -154,14 +154,19 @@ For each action, output the skill name that should be used.
 
 ## Important
 1. The number of selected skills must match the number of actions.
-2. If no suitable skill exists for an action, use "none" as the skill name.
+2. The JSON key for each entry MUST be the full action text copied VERBATIM
+   from the Actions list (not an index like "action1"), because the key is
+   used as the task description in the generated workflow.
+3. AVOID "none": every action in an orchestrated workflow must be executable
+   by some agent. For each action choose the CLOSEST related skill; only
+   output "none" when no skill is even remotely related to the action.
 
 ## Output Format
 ```json
 {{
-    "action1": "some-skill",
-    "action2": "some-skill",
-    "action3": "some-skill"
+    "<full text of the first action>": "some-skill",
+    "<full text of the second action>": "some-skill",
+    "<full text of the third action>": "some-skill"
 }}
 ```"""
 
