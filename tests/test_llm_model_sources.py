@@ -126,14 +126,16 @@ def test_invalid_extra_body_rejected(tmp_path):
 
 
 def test_generic_llm_picks_up_stream_and_proxy(tmp_path):
+    # http proxy on purpose: constructing the client must not require the
+    # optional socksio dependency that socks5:// proxies would pull in.
     write_models(tmp_path, {"chat": chat(
         stream=True,
-        proxy="socks5://127.0.0.1:7897",
+        proxy="http://127.0.0.1:7897",
         stream_total_timeout=480,
     )})
     instance = get_llm_instance()
     assert instance._stream is True
-    assert instance._proxy == "socks5://127.0.0.1:7897"
+    assert instance._proxy == "http://127.0.0.1:7897"
     assert instance._stream_total_timeout == 480.0
     assert get_model_config("embed") is None
 

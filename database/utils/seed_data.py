@@ -37,6 +37,7 @@ Manual import (optional, e.g. for custom install scripts):
 """
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -55,6 +56,19 @@ INSERT_SEED_PSOP_SQL = """
     VALUES (%s, %s, %s, %s)
     ON CONFLICT (id) DO NOTHING
 """
+
+TESTING_ENV = "TESTING"
+
+
+def _testing_mode() -> bool:
+    """True when the process is running the test suite.
+
+    Seeding is deployment-time behavior: the live integration tests create
+    their own throwaway databases and assert exact row counts, so the default
+    data must never be injected there (same convention as the solution
+    package manager).
+    """
+    return os.environ.get(TESTING_ENV, "").lower() in ("true", "1", "yes")
 
 
 def list_seed_files(seed_dir: Path = SEED_DATA_DIR) -> List[Path]:
@@ -89,6 +103,9 @@ def seed_default_psops(seed_dir: Path = SEED_DATA_DIR) -> int:
     seed_files = list_seed_files(seed_dir)
     if not seed_files:
         logger.warning(f"No seed PSOP files found in {seed_dir} - skipping default data import")
+        return 0
+    if _testing_mode():
+        logger.info("TESTING mode: skipping default data seeding")
         return 0
     if persistence_mode() == "mysql":
         # The seed SQL is PostgreSQL-flavored (ON CONFLICT ... DO NOTHING);
@@ -148,6 +165,9 @@ def seed_default_psops_to_file_storage(seed_dir: Path = SEED_DATA_DIR, target_di
     seed_files = list_seed_files(seed_dir)
     if not seed_files:
         logger.warning(f"No seed PSOP files found in {seed_dir} - skipping file storage seeding")
+        return 0
+    if _testing_mode():
+        logger.info("TESTING mode: skipping file storage seeding")
         return 0
     if target_dir is None:
         target_dir = Path(get_root_path()) / "data" / "workflow_storage" / "psop"

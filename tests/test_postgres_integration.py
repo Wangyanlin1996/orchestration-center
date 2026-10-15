@@ -107,7 +107,10 @@ def live_postgres(monkeypatch):
             keep.close()
 
 
-def test_live_crud_unicode_upsert_large_records_and_utc(live_postgres, sample_psop_dict):
+def test_live_crud_unicode_upsert_large_records_and_utc(live_postgres, sample_psop_dict, monkeypatch):
+    # Default-data seeding is deployment-time behavior; keep the exact row
+    # counts below meaningful by running create_tables() in test mode.
+    monkeypatch.setenv("TESTING", "true")
     create_tables()  # startup is idempotent
     psop = PSOP.model_validate({
         **sample_psop_dict,

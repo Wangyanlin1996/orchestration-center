@@ -32,6 +32,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SHIPPED_SEEDS = REPO_ROOT / "database" / "seed_data" / "psop"
 
 
+@pytest.fixture(autouse=True)
+def _allow_seeding(monkeypatch):
+    """The seeders refuse to run under TESTING; these are unit tests of the
+    seeder itself, so switch the gate off."""
+    monkeypatch.delenv("TESTING", raising=False)
+
+
 def _minimal_psop(psop_id: str, name: str) -> dict:
     return {
         "id": psop_id,
