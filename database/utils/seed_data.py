@@ -22,11 +22,14 @@ that a fresh installation starts with a usable workflow library:
     database/seed_data/psop/*.json   # one PSOP workflow per file
 
 Seeding happens automatically at installation/startup:
-    database.utils.table_creation.create_tables() -> seed_default_psops()
+    database.utils.table_creation.create_tables() -> seed_default_psops()          # database modes
+    orchestrate.persistence.file_backend.FileStorageBackend.initialize()
+        -> seed_default_psops_to_file_storage()                                    # file mode
 
 The import is idempotent and non-destructive: rows whose id already exists in
-the psop table are left untouched (ON CONFLICT DO NOTHING), so user edits made
-through the designer or the API are never overwritten by re-seeding.
+the psop table are left untouched (ON CONFLICT DO NOTHING), and existing
+workflow storage files are never overwritten, so user edits made through the
+designer or the API are never overwritten by re-seeding.
 
 Manual import (optional, e.g. for custom install scripts):
 
@@ -34,8 +37,9 @@ Manual import (optional, e.g. for custom install scripts):
 """
 
 import json
+import shutil
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -130,6 +134,40 @@ def seed_default_psops(seed_dir: Path = SEED_DATA_DIR) -> int:
         f"{skipped} already present or skipped, out of {len(seed_files)} seed files"
     )
     return inserted
+
+
+def seed_default_psops_to_file_storage(seed_dir: Path = SEED_DATA_DIR, target_dir: Optional[Path] = None) -> int:
+    """Materialize the default PSOP workflows into file-based workflow storage.
+
+    File persistence mode (`persistence_mode=file`) never touches the
+    database, so without this step a default deployment has an empty workflow
+    library even though the seed files ship with the repository. Copies each
+    seed file to <target>/<psop_id>.json, leaving existing files untouched
+    (user edits are never overwritten). Returns the number of files copied.
+    """
+    seed_files = list_seed_files(seed_dir)
+    if not seed_files:
+        logger.warning(f"No seed PSOP files found in {seed_dir} - skipping file storage seeding")
+        return 0
+    if target_dir is None:
+        target_dir = Path(get_root_path()) / "data" / "workflow_storage" / "psop"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for path in seed_files:
+        try:
+            _, psop = _load_seed_record(path)
+        except Exception as e:
+            logger.error(f"Skipping invalid seed file {path.name}: {e}")
+            continue
+        target = target_dir / f"{psop.id}.json"
+        if target.exists():
+            continue
+        shutil.copyfile(path, target)
+        copied += 1
+        logger.info(f"Seeded default workflow into file storage: '{psop.name}' (id={psop.id})")
+    if copied:
+        logger.info(f"Default file-storage seeding finished: {copied} workflow(s) copied into {target_dir}")
+    return copied
 
 
 if __name__ == "__main__":

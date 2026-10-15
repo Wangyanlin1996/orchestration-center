@@ -1,0 +1,12 @@
+{
+  "pdf_filename": "IG1503A_AN_L4_Individual_Services_Service_Assurance_Solution_Package.pdf",
+  "chapters": {
+    "5. Interaction Flow": "## 5. Interaction Flow\n\nThe interaction flow for Individual Service Assurance follows the IAADE sequence (Perception, Analysis, Decision, Execution). Functional modules exchange KPIs, events, and recommendations to ensure closed-loop assurance of service quality.\n\n[Figure: Interaction Flow for Individual Service Assurance Scenario Solution Package]\n\n### Step 1 – Perception (KPI Collection):\n\nThe network and service elements periodically report performance KPIs and QoE indicators to the Service Assurance Agent.\n\n### Step 2 & 3 – Analysis (QoE Evaluation & Diagnosis):\n\nThe Assurance Agent identifies poor QoE, correlates relevant KPIs and faults, and performs automated diagnosis to generate potential optimization solutions.\n\n### Step 4 – Decision (Recommendation & Root Cause Correlation):\n\nRecommendations are formulated, with associated KPIs and root cause information. These are reported to the orchestration layer and ticket management systems for traceability.\n\n### Step 5 – Execution (Closed-Loop Action):\n\nThe Assurance Agent triggers corrective actions & network change agent execute on NE"
+  },
+  "chapter_count": 1,
+  "chapter_titles": [
+    "5. Interaction Flow"
+  ],
+  "created_at": "2026-10-15T08:00:00+00:00",
+  "workflow_id": "3b984a28-1765-4905-afee-2ca3f99241d7"
+}
