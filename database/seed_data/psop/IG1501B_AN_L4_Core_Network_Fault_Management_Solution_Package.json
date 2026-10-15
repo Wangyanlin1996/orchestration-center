@@ -1,0 +1,88 @@
+{
+  "id": "2943f26b-96ed-40b3-84bc-adc784257e81",
+  "name": "IG1501B_AN_L4_Core_Network_Fault_Management_Solution_Package",
+  "description": "Auto-generated from SPG IG1501B_AN_L4_Core_Network_Fault_Management_Solution_Package.pdf, chapter '5. Interaction Flow'",
+  "created_at": "2026-10-15T06:35:42.045607Z",
+  "steps": [
+    {
+      "name": "step1",
+      "type": "AnySuccess",
+      "subtasks": [
+        {
+          "task_id": "task1a",
+          "description": "Automatically report core network faults (with diagnosis)",
+          "agent": "Core Network Fault Management Agent",
+          "skill": "Core Network Fault Diagnosis",
+          "status": "pending"
+        },
+        {
+          "task_id": "task1b",
+          "description": "Automatically report core network faults (no diagnosis)",
+          "agent": "Core Network Fault Management Agent",
+          "skill": "Core Network Fault Identification",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step2",
+          "condition": "Root cause diagnosis provided"
+        },
+        {
+          "step": "step3",
+          "condition": "No diagnosis provided"
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step2",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task2",
+          "description": "Upon approval, the fault rectification is triggered.",
+          "agent": "Core Network Fault Management Agent",
+          "skill": "Core Network Fault Handling",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task3",
+          "description": "Copilot Smart Q&A",
+          "agent": "Field Maintenance Copilot Agent",
+          "skill": "Natural Language Operational Guidance",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    }
+  ],
+  "related_preflow": "646fa6e9-2134-423e-bc3a-58d9a50a4440",
+  "user_intent": "# 5. Interaction Flow\n\nBased on the above functional architecture and the integration model of Agent/Copilot, this chapter focuses on how to achieve end-to-end processing of the Core Network single-do",
+  "tags": [
+    "spg",
+    "solution-package"
+  ]
+}

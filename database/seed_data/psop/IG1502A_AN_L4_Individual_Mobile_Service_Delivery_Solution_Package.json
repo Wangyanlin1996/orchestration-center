@@ -1,0 +1,224 @@
+{
+  "id": "b3424fd8-73f6-40cb-9879-a85330fd1fe2",
+  "name": "IG1502A_AN_L4_Individual_Mobile_Service_Delivery_Solution_Package",
+  "description": "Auto-generated from SPG IG1502A_AN_L4_Individual_Mobile_Service_Delivery_Solution_Package.pdf, chapter '5. Interaction Flow'",
+  "created_at": "2026-10-15T06:40:54.942765Z",
+  "steps": [
+    {
+      "name": "step1",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task1",
+          "description": "Generate radio service intent template based on individual mobile service delivery intent",
+          "agent": "Energy Saving Intent Agent",
+          "skill": "Intent Generation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step2",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step2",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task2",
+          "description": "Configure radio service intent templates (including supported scene, supported service SLA targets, assurance time)",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Lifecycle Management",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step3",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task3",
+          "description": "Perform radio service intent exploration to evaluate and determine the maximum number of UEs possible to subscribe and access the individual mobile service with expected SLAs",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Exploration",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step4",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step4",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task4",
+          "description": "Obtain the radio service intent exploration report, including the maximum number of UEs possible to subscribe and access with expected SLAs",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Reporting",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step5",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step5",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task5",
+          "description": "Query service capacity information usable for user subscription",
+          "agent": "RAN Agent",
+          "skill": "Analysis and Evaluation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step6",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step6",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task6",
+          "description": "Request to subscribe to the individual mobile service package",
+          "agent": "Service Delivery Agent",
+          "skill": "Service Order Intake",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step7",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step7",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task7",
+          "description": "Request to check the feasibility of the user's subscription for the individual mobile service",
+          "agent": "Energy Saving Intent Agent",
+          "skill": "Intent Exploration Request",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step8",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task8",
+          "description": "Perform radio service intent feasibility check to determine whether the radio service at the specified geo coordinate is feasible for subscription and access",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Exploration",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step9",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step9",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task9",
+          "description": "Obtain the radio service intent feasibility check report",
+          "agent": "RAN Energy Saving Agent",
+          "skill": "RAN ES Intent Reporting",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step10",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step10",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task10",
+          "description": "Configure the user's subscription information to enable the user to successfully access the subscribed mobile service",
+          "agent": "Service Delivery Agent",
+          "skill": "Service Provisioning Orchestration",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    }
+  ],
+  "related_preflow": "58a22044-5fcf-44b5-96b6-f101192bec51",
+  "user_intent": "# 5. Interaction Flow\n\nBased on the above functional architecture and the integration model of Agent/Copilot, this chapter focuses on how to achieve end-to-end processing of the Individual Mobile Serv",
+  "tags": [
+    "spg",
+    "solution-package"
+  ]
+}

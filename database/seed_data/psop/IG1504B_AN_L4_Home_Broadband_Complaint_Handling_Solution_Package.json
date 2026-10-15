@@ -1,0 +1,272 @@
+{
+  "id": "42e4f43e-2a42-4515-8059-345e4e10310f",
+  "name": "IG1504B_AN_L4_Home_Broadband_Complaint_Handling_Solution_Package",
+  "description": "Auto-generated from SPG IG1504B_AN_L4_Home_Broadband_Complaint_Handling_Solution_Package.pdf, chapter '5. Interaction Flow'",
+  "created_at": "2026-10-15T07:30:56.097962Z",
+  "steps": [
+    {
+      "name": "step1",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task1",
+          "description": "Automatically analyze user complaints",
+          "agent": "Complaint Handling Agent",
+          "skill": "Complaint Intake and Classification",
+          "status": "pending"
+        },
+        {
+          "task_id": "task7",
+          "description": "Perform complaint analysis to determine whether there is a service interruption or quality issue",
+          "agent": "Complaint Handling Agent",
+          "skill": "Complaint Intake and Classification",
+          "status": "pending"
+        },
+        {
+          "task_id": "task14",
+          "description": "Analyze complaint issues",
+          "agent": "Complaint Handling Agent",
+          "skill": "Complaint Root Cause Analysis",
+          "status": "pending"
+        },
+        {
+          "task_id": "task15",
+          "description": "Manage sessions for NOC Copilot natural language interface",
+          "agent": "AN L4 Cross-Domain Fault Management Agent",
+          "skill": "General Orchestration Support",
+          "status": "pending"
+        },
+        {
+          "task_id": "task16",
+          "description": "Manage sessions for FME Copilot natural language interface",
+          "agent": "Field Maintenance Copilot Agent",
+          "skill": "Copilot Collaboration",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step2",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step2",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task2",
+          "description": "Correlate complaints with known or common issues, non-network-related issues, and network-related issues",
+          "agent": "Complaint Handling Agent",
+          "skill": "Complaint Root Cause Analysis",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step3",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task3",
+          "description": "Classify network issues",
+          "agent": "Complaint Handling Agent",
+          "skill": "Complaint Intake and Classification",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step4",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step4",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task8",
+          "description": "Perform fault localization",
+          "agent": "Complaint Handling Agent",
+          "skill": "Complaint Root Cause Analysis",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step5",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step5",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task4",
+          "description": "Collaborate with single-domain fault agents or network optimization agents to perform root cause localization",
+          "agent": "AN L4 Cross-Domain Fault Management Agent",
+          "skill": "Cross-Domain Fault Demarcation and Location",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step6",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step6",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task9",
+          "description": "Send the issue to the professional workbench interface for further root cause identification",
+          "agent": "AN L4 Cross-Domain Fault Management Agent",
+          "skill": "General Orchestration Support",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step7",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step7",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task13",
+          "description": "Report intelligent fault messages",
+          "agent": "AN L4 Cross-Domain Fault Management Agent",
+          "skill": "Fault Management Summary Report",
+          "status": "pending"
+        },
+        {
+          "task_id": "task5",
+          "description": "Provide resolution suggestions such as adjusting router channels or restarting the optical modem",
+          "agent": "Field Maintenance Copilot Agent",
+          "skill": "Fault Knowledge Retrieval",
+          "status": "pending"
+        },
+        {
+          "task_id": "task10",
+          "description": "Determine whether the issue can be resolved through automated optimization or remote handling based on fault localization results",
+          "agent": "Complaint Handling Agent",
+          "skill": "Complaint Resolution and Closure",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8",
+          "condition": "Cannot be resolved automatically or remotely"
+        },
+        {
+          "step": "step10",
+          "condition": "Can be resolved automatically or remotely"
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step8",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task11",
+          "description": "Generate a maintenance work order for issues that cannot be resolved automatically or remotely",
+          "agent": "Work Order Management Agent",
+          "skill": "Work Order Creation",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step9",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step9",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task12",
+          "description": "Send the maintenance work order to the relevant maintenance department for on-site handling",
+          "agent": "Work Order Management Agent",
+          "skill": "Work Order Dispatch",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step10",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step10",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "task6",
+          "description": "Provide closed-loop verification",
+          "agent": "Complaint Handling Agent",
+          "skill": "Complaint Resolution and Closure",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 1,
+      "context_from": [
+        "*"
+      ]
+    }
+  ],
+  "related_preflow": "89723d45-ca3a-4c54-86f4-bc8f9bca8b54",
+  "user_intent": "# 6. Interaction Flow\n\n## 6.1. Overall Complaint Handling Process\n\nIn the home broadband complaint handling system, the complaint handling agent automatically analyzes user complaints and correlates t",
+  "tags": [
+    "spg",
+    "solution-package"
+  ]
+}

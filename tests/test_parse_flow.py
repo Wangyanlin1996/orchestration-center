@@ -355,3 +355,95 @@ class TestParsePdfAllChapters:
         with patch('fitz.open', side_effect=Exception("Open failed")):
             with pytest.raises(PDFParsingError):
                 parser.parse_pdf_all_chapters(str(pdf_path))
+
+
+def _toc_doc(toc, page_count=20):
+    doc = MagicMock()
+    doc.page_count = page_count
+    doc.get_toc.return_value = toc
+    return doc
+
+
+class TestFindChapterRangeFuzzy:
+    """Numbering-agnostic chapter lookup for inconsistent SPG documents."""
+
+    def test_numbering_shift_is_tolerated(self):
+        # Some SPGs carry an extra Introduction chapter, shifting
+        # 'Interaction Flow' from chapter 5 to chapter 6 (e.g. IG1504B).
+        toc = [
+            (1, "1. Introduction", 2),
+            (1, "5. Architecture", 6),
+            (1, "6. Interaction Flow", 10),
+            (1, "7. Conclusion", 14),
+        ]
+        start, end = SolutionPackageParser.find_chapter_range_fuzzy(
+            _toc_doc(toc), "5. Interaction Flow")
+        assert (start, end) == (10, 14)
+
+    def test_unnumbered_topic_matches(self):
+        toc = [
+            (1, "Introduction", 2),
+            (1, "Interaction Flow", 9),
+            (1, "Conclusion", 13),
+        ]
+        start, end = SolutionPackageParser.find_chapter_range_fuzzy(
+            _toc_doc(toc), "5. Interaction Flow")
+        assert (start, end) == (9, 13)
+
+    def test_substring_topic_matches(self):
+        toc = [
+            (1, "1. Overview", 2),
+            (1, "2. Interaction Flow (Overview)", 7),
+            (1, "3. Conclusion", 12),
+        ]
+        start, end = SolutionPackageParser.find_chapter_range_fuzzy(
+            _toc_doc(toc), "Interaction Flow")
+        assert (start, end) == (7, 12)
+
+    def test_exact_match_wins_over_substring(self):
+        toc = [
+            (1, "1. Interaction Flow Summary", 4),
+            (1, "2. Interaction Flow", 8),
+            (1, "3. Conclusion", 12),
+        ]
+        start, end = SolutionPackageParser.find_chapter_range_fuzzy(
+            _toc_doc(toc), "2. Interaction Flow")
+        assert (start, end) == (8, 12)
+
+    def test_subchapter_does_not_cut_the_range(self):
+        toc = [
+            (1, "1. Overview", 2),
+            (1, "6. Interaction Flow", 10),
+            (2, "6.1. Interfaces", 12),
+            (1, "7. Conclusion", 14),
+        ]
+        start, end = SolutionPackageParser.find_chapter_range_fuzzy(
+            _toc_doc(toc), "6. Interaction Flow")
+        assert (start, end) == (10, 14)
+
+    def test_last_chapter_runs_to_page_count(self):
+        toc = [(1, "1. Overview", 2), (1, "6. Interaction Flow", 10)]
+        start, end = SolutionPackageParser.find_chapter_range_fuzzy(
+            _toc_doc(toc, page_count=18), "Interaction Flow")
+        assert (start, end) == (10, 18)
+
+    def test_no_match_returns_none(self):
+        toc = [(1, "1. Overview", 2), (1, "2. Conclusion", 9)]
+        result = SolutionPackageParser.find_chapter_range_fuzzy(
+            _toc_doc(toc), "5. Interaction Flow")
+        assert result == (None, None)
+
+    def test_get_chapter_text_falls_back_to_fuzzy(self, parser, tmp_path):
+        toc = [
+            (1, "1. Introduction", 2),
+            (1, "6. Interaction Flow", 10),
+            (1, "7. Conclusion", 14),
+        ]
+        doc = _toc_doc(toc)
+        pdf_path = tmp_path / "test.pdf"
+        pdf_path.touch()
+        with patch('fitz.open', return_value=doc), \
+             patch.object(SolutionPackageParser, 'extract_text', return_value='flow text') as ex:
+            text = parser.get_chapter_text(str(pdf_path), '5. Interaction Flow')
+        assert text == 'flow text'
+        ex.assert_called_once_with(doc, 10, 14)

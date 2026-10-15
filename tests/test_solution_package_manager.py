@@ -67,6 +67,48 @@ def test_default_demo_seeding_keeps_custom_storage_empty_and_existing_imports_in
     assert json.loads(existing.read_text(encoding="utf-8"))["pdf_filename"] == "operator.pdf"
 
 
+def test_default_seeding_tops_up_new_packages_without_overwriting_existing(tmp_path, monkeypatch):
+    """An existing deployment gains newly shipped default packages on restart,
+    while user-imported or previously seeded records stay untouched."""
+    from orchestrate.solution_package import manager as manager_module
+
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.setattr(manager_module, "__file__",
+                        str(tmp_path / "orchestrate" / "solution_package" / "manager.py"))
+    monkeypatch.delenv("TESTING", raising=False)
+    seeds = tmp_path / "samples" / "solution_packages"
+    seeds.mkdir(parents=True)
+    shutil.copyfile(root / "samples" / "solution_packages" / f"{DEMO_PACKAGE}.json",
+                    seeds / f"{DEMO_PACKAGE}.json")
+
+    # first deployment generation: only the demo package ships as a seed
+    first = SolutionPackageManager()
+    assert first.retrieve_by_filename(f"{DEMO_PACKAGE}.pdf")["chapter_count"] == 13
+
+    # simulate an operator edit to the seeded demo record
+    demo = first.storage_dir / f"{DEMO_PACKAGE}.json"
+    record = json.loads(demo.read_text(encoding="utf-8"))
+    record["workflow_id"] = "operator-changed"
+    demo.write_text(json.dumps(record), encoding="utf-8")
+
+    # a later release ships one more default package
+    (seeds / "IG1501_new_default.json").write_text(json.dumps({
+        "pdf_filename": "IG1501_new_default.pdf",
+        "chapters": {"5. Interaction Flow": "steps"},
+        "chapter_count": 1,
+        "chapter_titles": ["5. Interaction Flow"],
+        "created_at": "2026-10-15T08:00:00+00:00",
+        "workflow_id": "shipped-seed-id",
+    }), encoding="utf-8")
+
+    # re-initialization must add the new package without reverting the edit
+    SolutionPackageManager()
+    assert first.retrieve_by_filename("IG1501_new_default.pdf")["workflow_id"] == "shipped-seed-id"
+    kept = json.loads(demo.read_text(encoding="utf-8"))
+    assert kept["workflow_id"] == "operator-changed"
+    assert kept["chapter_count"] == 13
+
+
 def test_testing_mode_disables_default_demo_copy(tmp_path, monkeypatch):
     from orchestrate.solution_package import manager as manager_module
 

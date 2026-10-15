@@ -17,6 +17,7 @@
 
 import pytest
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orchestrate.core.psop_generator import PsopGenerator, WorkflowGeneratorError
@@ -117,3 +118,81 @@ class TestMatchActionsToSkills:
         mock_card.configure_mock(name="A", description="d", skills=[])
         with pytest.raises(WorkflowGeneratorError):
             generator.match_actions_to_skills(["task1"], [mock_card])
+
+
+def _card(name, skills):
+    card = MagicMock()
+    card.configure_mock(name=name, description="desc", skills=list(skills))
+    return card
+
+
+def _skill(name):
+    skill = MagicMock()
+    skill.configure_mock(name=name, description="skill desc")
+    return skill
+
+
+def _psop_structure_json(agent="Invented Actor"):
+    return json.dumps({
+        "name": "WF",
+        "steps": [{
+            "name": "step1",
+            "type": "AllSuccess",
+            "subtasks": [{
+                "description": "Action A",
+                "agent": agent,
+                "skill": "Skill X",
+            }],
+            "next": [],
+        }],
+    })
+
+
+class TestNormalizeSubtaskAgents:
+    def test_rewrites_invented_agent_to_skill_owner(self, generator):
+        task = Task(description="Action A", agent="Invented Actor", skill="Skill X")
+        psop = PSOP(name="WF", steps=[Step(name="step1", subtasks=[task])])
+        PsopGenerator._normalize_subtask_agents(psop, {"Skill X": "Owner Agent"})
+        assert psop.steps[0].subtasks[0].agent == "Owner Agent"
+
+    def test_keeps_matching_agent(self, generator):
+        task = Task(description="Action A", agent="Owner Agent", skill="Skill X")
+        psop = PSOP(name="WF", steps=[Step(name="step1", subtasks=[task])])
+        PsopGenerator._normalize_subtask_agents(psop, {"Skill X": "Owner Agent"})
+        assert psop.steps[0].subtasks[0].agent == "Owner Agent"
+
+    def test_unknown_skill_left_untouched(self, generator):
+        task = Task(description="Action A", agent="Some Agent", skill="Mystery Skill")
+        psop = PSOP(name="WF", steps=[Step(name="step1", subtasks=[task])])
+        PsopGenerator._normalize_subtask_agents(psop, {"Skill X": "Owner Agent"})
+        assert psop.steps[0].subtasks[0].agent == "Some Agent"
+
+
+class TestSkillFallbackRouting:
+    def test_none_action_falls_back_to_generic_skill(self, generator, mock_llm):
+        mock_llm.ask_llm.side_effect = [
+            ("req_id", '```json\n["Action A", "Helper chore"]\n```'),
+            ("req_id", '```json\n{"Action A": "Skill X", "Helper chore": "none"}\n```'),
+            ("req_id", f'```json\n{_psop_structure_json()}\n```'),
+        ]
+        cards = [_card("Owner Agent", [_skill("Skill X"),
+                                       _skill("General Orchestration Support")])]
+        preflow = SimpleNamespace(steps_md="# Step 1\nAction A", name="WF", id="pf-1")
+        psop = generator.generate_psop_workflow(preflow, cards)
+        assert isinstance(psop, PSOP)
+        # the structure-building LLM invented an agent; it must be normalized
+        assert psop.steps[0].subtasks[0].agent == "Owner Agent"
+        # the 'none' action was routed through the fallback skill in the prompt
+        structure_prompt = mock_llm.ask_llm.call_args_list[2].args[0]
+        assert "General Orchestration Support" in structure_prompt
+        assert "Helper chore" in structure_prompt
+
+    def test_none_action_without_fallback_raises(self, generator, mock_llm):
+        mock_llm.ask_llm.side_effect = [
+            ("req_id", '```json\n["Action A", "Helper chore"]\n```'),
+            ("req_id", '```json\n{"Action A": "Skill X", "Helper chore": "none"}\n```'),
+        ]
+        cards = [_card("Owner Agent", [_skill("Skill X")])]
+        preflow = SimpleNamespace(steps_md="# Step 1\nAction A", name="WF", id="pf-1")
+        with pytest.raises(WorkflowGeneratorError, match="No matching agent found"):
+            generator.generate_psop_workflow(preflow, cards)

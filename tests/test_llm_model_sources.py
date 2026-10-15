@@ -83,7 +83,60 @@ def test_model_definition_comes_only_from_yaml(monkeypatch, tmp_path):
     config = get_model_config("chat")
     assert config.model == "chat-model"
     assert config.url == "https://example.invalid/chat"
-    assert config.body["messages"][0]["content"] == "$PROMPT"
+
+
+def test_stream_proxy_and_extra_body_pass_through(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAT_KEY", "secret")
+    write_models(tmp_path, {"chat": chat(
+        api_key_env="CHAT_KEY",
+        stream=True,
+        proxy="socks5://127.0.0.1:7897",
+        stream_total_timeout=480,
+        extra_body={"effort": "low", "max_tokens": 65536},
+    )})
+    config = load_model_configs()["chat"]
+    assert config["stream"] is True
+    assert config["proxy"] == "socks5://127.0.0.1:7897"
+    assert config["stream_total_timeout"] == 480.0
+    # extra_body merges on top of the profile contract, never replaces it
+    assert config["body"]["effort"] == "low"
+    assert config["body"]["max_tokens"] == 65536
+    assert config["body"]["messages"] == [{"role": "user", "content": "$PROMPT"}]
+    assert config["body"]["model"] == "$MODEL"
+
+
+def test_stream_proxy_defaults_when_absent(tmp_path):
+    write_models(tmp_path, {"chat": chat()})
+    config = load_model_configs()["chat"]
+    assert config["stream"] is False
+    assert config["proxy"] == ""
+    assert config["stream_total_timeout"] == 600.0
+
+
+def test_invalid_stream_total_timeout_rejected(tmp_path):
+    write_models(tmp_path, {"chat": chat(stream_total_timeout=-5)})
+    with pytest.raises(ValueError, match="stream_total_timeout"):
+        load_model_configs()
+
+
+def test_invalid_extra_body_rejected(tmp_path):
+    write_models(tmp_path, {"chat": chat(extra_body="not-a-mapping")})
+    with pytest.raises(ValueError, match="extra_body"):
+        load_model_configs()
+
+
+def test_generic_llm_picks_up_stream_and_proxy(tmp_path):
+    # http proxy on purpose: constructing the client must not require the
+    # optional socksio dependency that socks5:// proxies would pull in.
+    write_models(tmp_path, {"chat": chat(
+        stream=True,
+        proxy="http://127.0.0.1:7897",
+        stream_total_timeout=480,
+    )})
+    instance = get_llm_instance()
+    assert instance._stream is True
+    assert instance._proxy == "http://127.0.0.1:7897"
+    assert instance._stream_total_timeout == 480.0
     assert get_model_config("embed") is None
 
 

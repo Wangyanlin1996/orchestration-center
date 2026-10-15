@@ -53,24 +53,32 @@ class SolutionPackageManager:
         logger.info(f"SolutionPackageManager initialized with storage directory: {self.storage_dir}")
 
     def _seed_demo_packages(self) -> None:
-        """Copy the demo packages shipped in samples/solution_packages/ into an
-        empty storage directory.
+        """Copy the default packages shipped in samples/solution_packages/ into
+        the default storage directory.
 
-        Gives a fresh deployment a package to explore without needing the
-        original PDF. Real imports never get overwritten: seeding is skipped
-        as soon as the storage directory holds any package. Test runs never
-        seed, so importing the application cannot write into the working tree.
+        Gives a fresh deployment packages to explore without needing the
+        original PDFs, and keeps existing deployments current as new default
+        packages ship (the prebuilt AN L4 SPG set links to the seeded default
+        PSOP workflows). Seeding is per file: a storage file that already
+        exists - user-imported or previously seeded - is never overwritten.
+        Deleting a seeded package therefore only removes it until the next
+        restart. Test runs never seed, so importing the application cannot
+        write into the working tree.
         """
         if os.environ.get("TESTING", "").lower() in ("true", "1", "yes"):
             return
-        if any(self.storage_dir.glob("*.json")):
-            return
         if not self.seed_dir.is_dir():
             return
+        seeded = 0
         for seed_file in sorted(self.seed_dir.glob("*.json")):
             target = self.storage_dir / seed_file.name
+            if target.exists():
+                continue
             shutil.copyfile(seed_file, target)
-            logger.info(f"Seeded demo solution package: {seed_file.name}")
+            seeded += 1
+            logger.info(f"Seeded default solution package: {seed_file.name}")
+        if seeded:
+            logger.info(f"Seeded {seeded} default solution package(s) from {self.seed_dir}")
 
     def _get_storage_path(self, pdf_filename: str) -> Path:
         """

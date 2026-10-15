@@ -136,7 +136,22 @@ class FilePersistenceBackend(PersistenceBackend):
         """File storage needs no readiness probe; the directory is created lazily."""
 
     def initialize(self) -> None:
-        """``WorkflowStorage`` creates its directories in ``__init__``."""
+        """Seed the default workflow library into file storage.
+
+        Parallel to the SQL backend's ``initialize()`` (which creates the
+        schema and imports the default data): file persistence mode never
+        touches the database, so the shipped default PSOP workflows are
+        materialized here. Idempotent and non-blocking - a seeding failure
+        must not keep the server from starting.
+        """
+        from loguru import logger
+
+        from database.utils.seed_data import seed_default_psops_to_file_storage
+
+        try:
+            seed_default_psops_to_file_storage()
+        except Exception as e:
+            logger.error(f"Default workflow seeding into file storage failed (non-blocking): {e}")
 
     def psops(self) -> PsopRepository:
         return self._psops

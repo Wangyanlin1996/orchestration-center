@@ -17,6 +17,7 @@
 
 from database.utils.db_connection import create_connection
 from database.utils.query_execution import execute_query
+from database.utils.seed_data import seed_default_psops
 from loguru import logger
 from common.util.persistence_mode import persistence_mode
 
@@ -96,3 +97,11 @@ def create_tables():
         logger.info("Database tables verified/created: psop, execution_records, users")
     finally:
         conn.close()
+    try:
+        # Installation phase: import the shipped default SPG workflows so a
+        # fresh deployment starts with a usable workflow library. Idempotent -
+        # rows that already exist are never overwritten.
+        seed_default_psops()
+    except Exception as e:
+        # Default data must never block the installation/startup itself.
+        logger.error(f"Default data import failed (non-blocking): {e}")

@@ -55,7 +55,10 @@ class GenericLLM:
 
         self._verify_ssl = config.get('verify_ssl', config.get('verify', True))
         self._timeout = float(config.get('timeout', 60.0))
-        self._client = httpx.Client(verify=self._verify_ssl, timeout=self._timeout)
+        self._stream = bool(config.get('stream', False))
+        self._stream_total_timeout = float(config.get('stream_total_timeout', 600.0))
+        self._proxy = config.get('proxy', '') or None
+        self._client = httpx.Client(verify=self._verify_ssl, timeout=self._timeout, proxy=self._proxy)
 
     def to_dict(self):
         return {
@@ -139,9 +142,76 @@ class GenericLLM:
     def _do_request(self, body: dict) -> dict:
         headers = self._build_headers()
         logger.debug("GenericLLM request")
+        if self._stream:
+            body = dict(body)
+            body.setdefault('stream', True)
+            return self._do_stream_request(body, headers)
         response = self._client.post(self._url, headers=headers, json=body)
         response.raise_for_status()
         return response.json()
+
+    def _do_stream_request(self, body: dict, headers: Dict[str, str]) -> dict:
+        """Send a streaming (SSE) request and reassemble it into a non-streaming
+        response shape so that ``_extract`` keeps working unchanged.
+
+        Accumulates ``choices[0].delta.content`` as the answer and
+        ``choices[0].delta.reasoning_content`` as the reasoning text.
+        """
+        answer_parts: List[str] = []
+        reasoning_parts: List[str] = []
+        finish_reason = None
+        usage = None
+        started = _time.monotonic()
+        with self._client.stream('POST', self._url, headers=headers, json=body) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if _time.monotonic() - started > self._stream_total_timeout:
+                    raise TimeoutError(
+                        f"Streaming LLM response exceeded total timeout "
+                        f"{self._stream_total_timeout}s (server keep-alives suppress read timeouts)"
+                    )
+                if not line or not line.startswith('data:'):
+                    continue
+                payload = line[len('data:'):].strip()
+                if not payload or payload == '[DONE]':
+                    if payload == '[DONE]':
+                        break
+                    continue
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    logger.debug(f"Ignoring non-JSON SSE payload: {payload[:100]}")
+                    continue
+                if chunk.get('usage'):
+                    usage = chunk['usage']
+                choices = chunk.get('choices') or []
+                if not choices:
+                    logger.warning(f"SSE chunk without choices: {str(chunk)[:200]}")
+                    continue
+                delta = choices[0].get('delta') or {}
+                if choices[0].get('finish_reason'):
+                    finish_reason = choices[0]['finish_reason']
+                content = delta.get('content')
+                if content:
+                    answer_parts.append(content)
+                reasoning = delta.get('reasoning_content')
+                if reasoning:
+                    reasoning_parts.append(reasoning)
+        answer = ''.join(answer_parts)
+        if not answer:
+            logger.warning(
+                f"Streaming LLM response produced EMPTY content: "
+                f"finish_reason={finish_reason}, reasoning_chars={len(''.join(reasoning_parts))}, "
+                f"usage={usage}"
+            )
+        return {
+            'choices': [{
+                'message': {
+                    'content': answer,
+                    'reasoning_content': ''.join(reasoning_parts),
+                }
+            }]
+        }
 
     def _extract(self, data: dict, key: str):
         path = self._response_paths.get(key)

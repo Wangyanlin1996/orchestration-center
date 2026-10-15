@@ -90,6 +90,10 @@ def live_postgres(monkeypatch):
     monkeypatch.setattr(db_connection._ConnInfoHolder, "_instance", config)
     monkeypatch.setattr(db_connection, "_database_verified", False)
     monkeypatch.setattr(user_store, "_any_user_exists_cache", False)
+    # The fixture itself runs the startup path (create_tables below), so the
+    # TESTING gate has to be armed here - before the test body gets a chance -
+    # to keep deployment-time default-data seeding out of the throwaway schema.
+    monkeypatch.setenv("TESTING", "true")
     try:
         # The product code itself creates the database when it is missing.
         conn = _open_connection()

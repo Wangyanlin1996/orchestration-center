@@ -1,0 +1,207 @@
+{
+  "id": "1ce398c3-1d41-4d4b-a35a-d94f7c10f640",
+  "name": "IG1501C_AN_L4_IP_Network_Fault_Management_Solution_Package",
+  "description": "Auto-generated from SPG IG1501C_AN_L4_IP_Network_Fault_Management_Solution_Package.pdf, chapter '5. Interaction Flow'",
+  "created_at": "2026-10-15T06:38:27.765491Z",
+  "steps": [
+    {
+      "name": "step1",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "8f30acc5-9f29-4e83-940b-7a1406c8b254",
+          "description": "Perform fault identification",
+          "agent": "Mobile Network Fault Management Agent",
+          "skill": "Mobile Network Fault Identification",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step2",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step2",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "82fd566b-e2a0-46f8-95dc-4a1196af9471",
+          "description": "Perform automatic diagnosis",
+          "agent": "Mobile Network Fault Management Agent",
+          "skill": "Mobile Network Fault Diagnosis",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step3",
+          "condition": "Fault can be automatically repaired"
+        },
+        {
+          "step": "step6",
+          "condition": "Fault requires on-site repair"
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step3",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "b35b2769-3e56-4448-a4fe-eb621b381451",
+          "description": "Perform automatic repair",
+          "agent": "Mobile Network Fault Management Agent",
+          "skill": "Mobile Network Fault Handling",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step4",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step4",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "9b5eb4a7-ff72-45e0-bd83-5336b9b6fba2",
+          "description": "Report fault incident and handling results to service layer's fault management center",
+          "agent": "Mobile Network Fault Management Agent",
+          "skill": "Mobile Network Fault Handling",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step5",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step5",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "bbebfa21-365e-44b2-b32c-f9d81306144b",
+          "description": "Archive information",
+          "agent": "AN L4 Cross-Domain Fault Management Agent",
+          "skill": "Fault Management Summary Report",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step6",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "1d161a8a-ecf0-492c-b2f9-23d27d2f0da6",
+          "description": "Generate repair solution",
+          "agent": "Mobile Network Fault Management Agent",
+          "skill": "Mobile Network Fault Diagnosis",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step7",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step7",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "725c2d62-c49a-442f-81e7-ca7729afeb83",
+          "description": "Send fault incident and automatically generated handling recommendations to service layer fault center",
+          "agent": "Mobile Network Fault Management Agent",
+          "skill": "Mobile Network Fault Handling",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step8",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step8",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "fe0780aa-7071-40af-8e89-d27ab1aab9c6",
+          "description": "Initiate work order system to dispatch work order to FME",
+          "agent": "Work Order Management Agent",
+          "skill": "Work Order Dispatch",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "step9",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    },
+    {
+      "name": "step9",
+      "type": "AllSuccess",
+      "subtasks": [
+        {
+          "task_id": "974d3069-936f-46dc-ba08-090a176430de",
+          "description": "Interact with service layer Copilot and resource layer Copilot via app to obtain natural language-based repair guidance",
+          "agent": "Field Maintenance Copilot Agent",
+          "skill": "Copilot Collaboration",
+          "status": "pending"
+        }
+      ],
+      "next": [
+        {
+          "step": "end",
+          "condition": ""
+        }
+      ],
+      "layer": 0,
+      "context_from": null
+    }
+  ],
+  "related_preflow": "24b184f1-590d-4aeb-b951-89490718b778",
+  "user_intent": "# 5. Interaction Flow\n\nBased on the above functional architecture and the integration model of Agent/Copilot, this chapter focuses on how to achieve end-to-end processing of the IP Network single-doma",
+  "tags": [
+    "spg",
+    "solution-package"
+  ]
+}
