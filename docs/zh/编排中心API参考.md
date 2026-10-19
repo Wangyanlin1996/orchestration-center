@@ -126,7 +126,7 @@ HTTP/HTTPS 采用相同的账号认证；`verify_client=true` 额外要求 TLS �
 
 - 功能描述
 
-    接收 PDF/TXT/MD 文件（PDF 章节标题必须精确为 `5. Interaction Flow`，即交互流程；TXT/MD 直接读取全文）或 JSON 格式的 SOP 步骤文本，结合可用 Agent 列表，由 LLM 生成 PSOP 工作流并自动保存。
+    接收 PDF/TXT/MD 文件（PDF 解析 `5. Interaction Flow`，也接受 `6. Interaction Flow` 等编号变体；保持英文主题标题，TXT/MD 直接读取全文）或 JSON 格式的 SOP 步骤文本，结合可用 Agent 列表，由 LLM 生成 PSOP 工作流并自动保存。
 
 - 接口约束
 

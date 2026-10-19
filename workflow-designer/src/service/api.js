@@ -124,7 +124,25 @@ export async function deleteAgentCard(name, organization) {
 // ──── Workflow CRUD ────
 
 export async function getWorkflow() {
-    return api.get(`${ORCHESTRATE_BASE()}/workflows`);
+    const workflows = new Map();
+    let offset = 0;
+    while (true) {
+        const response = await api.get(`${ORCHESTRATE_BASE()}/workflows?limit=100&offset=${offset}`);
+        if (response.status !== 'success' || !Array.isArray(response.data)) {
+            throw new Error('Invalid workflow list response');
+        }
+        const page = response.pagination;
+        if (page && page.offset !== offset) {
+            throw new Error('Workflow pagination offset mismatch');
+        }
+        const previousSize = workflows.size;
+        for (const workflow of response.data) workflows.set(workflow.workflow_id, workflow);
+        if (!page?.has_more) {
+            return { ...response, data: [...workflows.values()], pagination: { offset: 0, limit: workflows.size, has_more: false } };
+        }
+        if (workflows.size === previousSize) throw new Error('Workflow pagination made no progress');
+        offset += response.data.length;
+    }
 }
 
 export async function getWorkflowById(id) {

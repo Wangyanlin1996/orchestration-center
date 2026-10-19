@@ -23,6 +23,7 @@ from common.util.config_util import get_conf
 from host_agent import ControlPointContext, HostAgentConfig, HostAgentExecutor
 from samples.spn_host_agent.control_point import SpnControlPoint
 from samples.spn_host_agent.lifecycle import SpnExtensionLifecycle
+from samples.spn_host_agent.registry import ConfiguredRegistryCardProvider
 
 
 def create_spn_host_executor(all_agent_cards: list | None = None) -> HostAgentExecutor:
@@ -55,4 +56,7 @@ def create_spn_host_executor(all_agent_cards: list | None = None) -> HostAgentEx
             ssl_verify,
         ),
         credentials_config=str(credentials_path),
+        agent_card_provider=ConfiguredRegistryCardProvider(
+            registry_url, {**conf, "ssl_verify": ssl_verify},
+        ),
     )

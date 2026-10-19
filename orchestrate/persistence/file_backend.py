@@ -149,7 +149,7 @@ class FilePersistenceBackend(PersistenceBackend):
         from database.utils.seed_data import seed_default_psops_to_file_storage
 
         try:
-            seed_default_psops_to_file_storage()
+            seed_default_psops_to_file_storage(target_dir=self._storage.psop_dir)
         except Exception as e:
             logger.error(f"Default workflow seeding into file storage failed (non-blocking): {e}")
 

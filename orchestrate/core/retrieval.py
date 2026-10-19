@@ -156,7 +156,7 @@ class WorkflowRetrieval:
                     results.append(psop)
         return results
 
-    def list_recent_workflows(self, limit: int = 10, workflow_type: str = "all") -> List[WorkflowSearchResult]:
+    def list_recent_workflows(self, limit: int = 10, workflow_type: str = "all", offset: int = 0) -> List[WorkflowSearchResult]:
         results = []
         if workflow_type in ("all", "psop"):
             results.extend(self._list_psop_summaries())
@@ -175,11 +175,11 @@ class WorkflowRetrieval:
 
         def _sort_key(x):
             if x.created_at.tzinfo:
-                return x.created_at.timestamp()
-            return x.created_at.replace(tzinfo=timezone.utc).timestamp()
+                return x.created_at.timestamp(), x.workflow_id
+            return x.created_at.replace(tzinfo=timezone.utc).timestamp(), x.workflow_id
 
         results.sort(key=_sort_key, reverse=True)
-        return results[:limit]
+        return results[offset:offset + limit]
 
     def _retrieve_names_by_intent(self, user_intent: str, top_n: int = 1) -> List[str]:
         summaries = self._list_psop_summaries()

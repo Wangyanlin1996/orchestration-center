@@ -64,7 +64,10 @@ def mock_agent_lib():
 @pytest.fixture
 def mock_parser():
     """Mock SolutionPackageParser"""
+    from orchestrate.solution_package.parse_flow import SolutionPackageParser
+    select_title = SolutionPackageParser.select_chapter_title
     with patch('orchestrate.server.frontend_support_server.SolutionPackageParser') as MockParser:
+        MockParser.select_chapter_title.side_effect = select_title
         mock_instance = MockParser.return_value
         yield mock_instance
 

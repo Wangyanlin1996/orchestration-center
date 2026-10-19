@@ -463,6 +463,7 @@ all_psop_semaphore = anyio.Semaphore(int(config.get(FLOW_CTL_PARALLEL_ALL_PSOPS,
 @router.get("/workflows")
 async def list_workflows(
     limit: int = Query(10, ge=1, le=100, description="Max workflows to return"),
+    offset: int = Query(0, ge=0, description="Number of workflows to skip"),
     _: Any = Depends(RateLimiter(config, "list_workflows"))
 ):
     acquired = False
@@ -470,9 +471,10 @@ async def list_workflows(
         all_psop_semaphore.acquire_nowait()
         acquired = True
         logger.info(f"Listing workflows: limit={limit}")
-        recent_workflows = SharedHandlers.retrieval().list_recent_workflows(limit=limit, workflow_type='psop')
+        recent_workflows = SharedHandlers.retrieval().list_recent_workflows(limit=limit + 1, workflow_type='psop', offset=offset)
         logger.info(f"Retrieved {len(recent_workflows)} workflows")
-        return ok(data=[wf.to_dict() for wf in recent_workflows])
+        return {**ok(data=[wf.to_dict() for wf in recent_workflows[:limit]]),
+                "pagination": {"offset": offset, "limit": limit, "has_more": len(recent_workflows) > limit}}
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")
     except HTTPException:
@@ -645,12 +647,14 @@ async def parse_pdf(
         )
         if not chapters_md:
             raise HTTPException(status_code=400, detail="No chapters found in PDF")
-        # 全量章节落库,供解决方案中心列表/详情使用
-        if not solution_package_manager.store_solution_package(filename, chapters_md):
-            logger.warning(f"Failed to store solution package for {filename}")
-        pre_md = chapters_md.get("5. Interaction Flow")
+        chapter_title = SolutionPackageParser.select_chapter_title(chapters_md, "5. Interaction Flow")
+        pre_md = chapters_md.get(chapter_title)
         if not pre_md:
             raise HTTPException(status_code=400, detail="Chapter '5. Interaction Flow' not found in PDF")
+
+        # Validate the required chapter before producing persistent side effects.
+        if not solution_package_manager.store_solution_package(filename, chapters_md):
+            raise HTTPException(status_code=503, detail="Failed to store solution package")
 
         logger.info(f"PDF chapter extracted (markdown, {len(pre_md)} chars):\n{pre_md}")
 

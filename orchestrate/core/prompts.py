@@ -157,9 +157,10 @@ For each action, output the skill name that should be used.
 2. The JSON key for each entry MUST be the full action text copied VERBATIM
    from the Actions list (not an index like "action1"), because the key is
    used as the task description in the generated workflow.
-3. AVOID "none": every action in an orchestrated workflow must be executable
-   by some agent. For each action choose the CLOSEST related skill; only
-   output "none" when no skill is even remotely related to the action.
+3. Choose a skill only when its advertised business domain and capability
+   actually cover the action. IP, transport, mobile and core network skills
+   are NOT interchangeable. Use "none" when no suitable capability exists;
+   a remotely related skill is not a valid substitute.
 
 ## Output Format
 ```json
