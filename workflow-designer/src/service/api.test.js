@@ -192,10 +192,34 @@ describe('api service', () => {
 
     it('getWorkflow should call api.get with correct URL', async () => {
       const mockApi = axios.create();
-      mockApi.get.mockResolvedValue({ data: 'workflows' });
+      mockApi.get.mockResolvedValue({ status: 'success', data: [] });
 
       await getWorkflow();
       expect(mockApi.get).toHaveBeenCalledWith(expect.stringContaining('/rest/v1/orchestrate/workflows'));
+    });
+
+    it('getWorkflow loads every page instead of hiding older workflows', async () => {
+      const mockApi = axios.create();
+      const first = Array.from({ length: 100 }, (_, i) => ({ workflow_id: `wf-${i}` }));
+      mockApi.get.mockResolvedValueOnce({ status: 'success', data: first, pagination: { offset: 0, has_more: true } });
+      mockApi.get.mockResolvedValueOnce({ status: 'success', data: [{ workflow_id: 'wf-100' }], pagination: { offset: 100, has_more: false } });
+      const result = await getWorkflow();
+      expect(result.data).toHaveLength(101);
+      expect(result.pagination.has_more).toBe(false);
+      expect(mockApi.get).toHaveBeenLastCalledWith(expect.stringContaining('limit=100&offset=100'));
+    });
+
+    it('getWorkflow rejects non-progressing pages instead of looping forever', async () => {
+      const mockApi = axios.create();
+      mockApi.get.mockResolvedValue({ status: 'success', data: [], pagination: { offset: 0, has_more: true } });
+      await expect(getWorkflow()).rejects.toThrow('no progress');
+    });
+
+    it('getWorkflow propagates a later page failure instead of returning a partial list', async () => {
+      const mockApi = axios.create();
+      mockApi.get.mockResolvedValueOnce({ status: 'success', data: [{ workflow_id: 'wf-0' }], pagination: { offset: 0, has_more: true } });
+      mockApi.get.mockRejectedValueOnce(new Error('synthetic failure'));
+      await expect(getWorkflow()).rejects.toThrow('synthetic failure');
     });
 
     it('getWorkflowById should call api.get with correct URL', async () => {

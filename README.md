@@ -137,6 +137,8 @@ sequenceDiagram
 
 MySQL setup, storage boundaries and container instructions: [MySQL persistence](docs/en/MySQL%20Persistence.md).
 
+SPG batch import, default-library readiness and safe upgrade of installed examples: [SPG import](docs/en/SPG%20Import.md). Default AN L4 AgentCards are a planning catalog, not deployed business agents.
+
 ## Quick Start
 
 ### Prerequisites

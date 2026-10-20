@@ -134,7 +134,7 @@ integrations are described in [transport configuration](../transport-runtime.md)
 
 - Description
 
-     Accepts PDF/TXT/MD files (PDF parses the "5. Interaction Flow" chapter, TXT/MD reads the full content) or JSON-formatted SOP step text, and combines them with the available Agent list to generate a PSOP workflow via LLM, which is then automatically saved.
+     Accepts PDF/TXT/MD files (PDF selects "5. Interaction Flow", also accepting numbering variants such as "6. Interaction Flow"; TXT/MD reads the full content) or JSON-formatted SOP step text, and combines them with the available Agent list to generate a PSOP workflow via LLM, which is then automatically saved.
 
 - Interface Constraints
 
