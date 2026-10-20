@@ -15,7 +15,7 @@ flowchart TD
     B -- false --> C[Chat call over the whole catalog]
     B -- true --> D[Embed the intent]
     D --> E[Reconcile index against the catalog]
-    E --> F[Cosine recall: top_k candidates]
+    E --> F[Cosine recall with one dimension-drift rebuild if needed]
     F --> G{retrieval.vector.rerank}
     G -- true --> H[Rerank: reorder candidates]
     G -- false --> I[Keep vector order]
@@ -39,15 +39,25 @@ can be deleted at any time and rebuilt on the next search.
   embedded (name, description, tags, user intent, task summary). An edited PSOP is
   re-embedded, an untouched one costs no network call, and a deleted PSOP is pruned
   so search can never return a stale id.
-- **Model and dimension changes**: the cache records the embedding model name. A
-  different model discards the cache. A changed vector dimension triggers a full
-  rebuild instead of mixing incomparable vectors.
-- **Read-only at search time**: a missing, corrupt or unwritable index degrades to a
-  rebuild or to an in-memory index. It never fails the search by itself.
+- **Model and dimension changes**: the cache records the embedding model name and
+  a SHA-256 fingerprint of the model, endpoint, request template/options and response
+  mapping (not their plaintext values or authentication credentials). A changed
+  fingerprint discards the cache, even when dimensions stay the same. A query
+  dimension mismatch triggers one full rebuild and retry, including with an
+  unchanged catalog or after restart. If the provider remains inconsistent, the
+  usual `strict`/catalog-fallback policy applies; there is no unbounded retry.
+- **Cache integrity**: invalid JSON/root structure is discarded; rows with invalid
+  dimensions, nonnumeric/boolean/nonfinite values are re-embedded. Valid rows are
+  reused. Rebuilding replaces the previous generation only after every document
+  succeeds. Version-1 caches are rebuilt once when upgrading.
+- **Persistence failures**: a missing, corrupt or unwritable index degrades to a
+  rebuild or to an in-memory index. Rebuilding still requires a healthy embedder.
 - **Concurrency**: the file is written atomically through a temporary file and
   `os.replace`. Independent processes may each keep their own in-memory copy and
   last-writer-wins the cache, which is safe because every pass reconciles with the
-  catalog.
+  catalog. Within a retrieval instance, reconcile/rebuild/search are serialized
+  so concurrent requests cannot observe a partially updated generation. Remote
+  query embeddings run outside that lock and can proceed concurrently.
 
 A vector database is deliberately not a dependency of this feature: with a few
 hundred PSOPs, an in-process cosine scan answers in well under a millisecond. The
@@ -59,16 +69,19 @@ without touching the retrieval code.
 | Key | Default | Meaning |
 |---|---|---|
 | `retrieval.vector.enabled` | `false` | Turns embedding recall on |
-| `retrieval.vector.top_k` | `20` | Recall depth handed to rerank and the final choice |
+| `retrieval.vector.top_k` | `5` | Recall depth handed to rerank and the final choice |
 | `retrieval.vector.min_score` | `0.0` | Minimum cosine similarity to keep a candidate |
 | `retrieval.vector.rerank` | `false` | Reorder candidates with the `rerank` model |
 | `retrieval.vector.llm_final` | `true` | Let the LLM choose among the candidates |
 | `retrieval.vector.strict` | `false` | Fail the search when embeddings are unavailable |
 | `retrieval.vector.index_file` | `data/vector_index/psop_vectors.json` | Cache location |
-| `retrieval.llm.thinking` | `true` | Send `thinking: {"type": "disabled"}` for selection calls |
+| `retrieval.llm.thinking` | `true` | `true`: retain model defaults; `false`: override with `thinking: {"type": "disabled"}` for every retrieval selection call |
 
 The `embed` capability must be configured in `etc/config/models.yaml` before the
 switch is turned on. `rerank` is only read when `retrieval.vector.rerank=true`.
+The thinking policy applies to whole-catalog selection, vector final selection
+and fallback alike. The override does not modify the shared chat client or the
+model definition; the gateway must support this provider-specific option.
 
 ## Failure behaviour
 
@@ -78,11 +91,14 @@ switch is turned on. `rerank` is only read when `retrieval.vector.rerank=true`.
 | Embedding model unavailable, `strict=true` | The error propagates to the caller |
 | Recall filters every candidate, e.g. `min_score` above the corpus similarity | Warning, then the LLM path answers |
 | Reranker unavailable or returning no order | Warning, then the vector order is kept |
-| Final selection call fails or names nothing recalled | Warning, then the vector order is kept |
+| Final selection fails, is malformed, or names only unknown candidates | Keep vector order; log call failures and unknown selections |
+| Final selection returns a valid empty array `[]` | Return no match; do not replace it with vector candidates or retry the catalog |
 | Index file corrupt or unwritable | Warning, then rebuild or in-memory index |
 
-The vector path therefore degrades towards the catalog, never towards an empty
-answer: a broken embedding endpoint must not read as "no matching PSOP".
+Infrastructure failure must not be confused with a valid business rejection:
+a broken embedding endpoint falls back to the catalog by default, while an
+explicit `[]` from final selection means "no matching PSOP". Setting
+`llm_final=false` deliberately bypasses this semantic selection and returns ranks.
 
 ## Measured cost
 

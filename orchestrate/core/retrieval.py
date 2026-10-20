@@ -15,8 +15,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import hashlib
 import json
 from datetime import timezone
+from threading import Lock
 from typing import Optional, List
 
 from loguru import logger
@@ -34,6 +36,7 @@ from orchestrate.core.persistence import WorkflowStorage
 from orchestrate.core.prompts import get_retrieve_psop_prompt
 from orchestrate.core.psop_vector_index import (
     PsopVectorIndex,
+    VectorDimensionMismatch,
     VectorSettings,
     psop_document,
     vector_settings,
@@ -65,6 +68,8 @@ class WorkflowRetrieval:
         # configured backend's repository. See PersistenceBackend.psops_for.
         self._psops = (context or current_context()).psops_for(storage)
         self._vector_index_cache = None
+        # Reconcile/rebuild/search must observe one index generation per request.
+        self._vector_lock = Lock()
 
     def _list_psop_summaries(self) -> List[WorkflowSearchResult]:
         return self._psops.list_summaries()
@@ -208,7 +213,7 @@ class WorkflowRetrieval:
         } for s in summaries]
 
         psop_list_str = json.dumps(psop_list, ensure_ascii=False, indent=2)
-        llm = get_llm_instance()
+        llm = self._retrieval_llm()
         prompt = get_retrieve_psop_prompt(
             user_intent, psop_list_str, top_n, lang=_detect_intent_lang(user_intent)
         )
@@ -234,14 +239,23 @@ class WorkflowRetrieval:
         return str(getattr(config, "model", "") or "")
 
     def _vector_index(self, settings: VectorSettings) -> PsopVectorIndex:
+        from common.llm.config.llm_config import get_model_config
+
         model = self._embed_model_name()
-        key = (settings.index_file, model)
+        config = get_model_config("embed")
+        # Hash vector-space-affecting configuration, never persist URLs, bodies
+        # or credentials. Auth/transport-only changes need not invalidate vectors.
+        identity = {name: getattr(config, name, None) for name in ("model", "url", "body", "response")}
+        fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
+        key = (settings.index_file, model, fingerprint)
         if self._vector_index_cache is None or self._vector_index_cache[0] != key:
-            self._vector_index_cache = (key, PsopVectorIndex(settings.index_file, model=model))
+            self._vector_index_cache = (key, PsopVectorIndex(
+                settings.index_file, model=model, fingerprint=fingerprint,
+            ))
         return self._vector_index_cache[1]
 
     def _retrieval_llm(self):
-        """Retrieval is a classification task; thinking is opt-in per deployment."""
+        """Apply the same selection policy to catalog, vector and fallback calls."""
         if vector_settings().thinking:
             return get_llm_instance()
         return get_chat_instance_with_body("retrieval_no_thinking", {"thinking": {"type": "disabled"}})
@@ -254,11 +268,20 @@ class WorkflowRetrieval:
             return []
 
         embedder = get_embed_instance()
-        index = self._vector_index(settings)
-        index.reconcile(summaries, embedder.embed)
+        # Remote query embeddings are independent and may run concurrently.
+        # Only shared index mutations and reads need the generation lock.
         query_vector = embedder.embed(user_intent)
-
-        hits = index.search(query_vector, settings.top_k, settings.min_score)
+        with self._vector_lock:
+            index = self._vector_index(settings)
+            index.reconcile(summaries, embedder.embed)
+            try:
+                hits = index.search(query_vector, settings.top_k, settings.min_score)
+            except VectorDimensionMismatch:
+                # Also detect drift when no document changed. One rebuild only:
+                # a persistently inconsistent provider must fail/fall back.
+                logger.warning("[Retrieval] Query dimension changed; rebuilding PSOP vectors once")
+                index.rebuild(summaries, embedder.embed)
+                hits = index.search(query_vector, settings.top_k, settings.min_score)
         by_id = {summary.workflow_id: summary for summary in summaries}
         candidates = [
             by_id[workflow_id].model_copy(update={"score": score})
@@ -343,6 +366,9 @@ class WorkflowRetrieval:
             return candidates[:top_n]
         if not isinstance(names, list):
             return candidates[:top_n]
+        if not names:
+            # An explicit business rejection is not a provider failure.
+            return []
 
         by_id = {candidate.workflow_id: candidate for candidate in candidates}
         # Candidates arrive in score order, so of two PSOPs sharing a name the

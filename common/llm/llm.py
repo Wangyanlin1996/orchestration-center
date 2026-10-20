@@ -26,6 +26,17 @@ from common.llm.provider.generic_llm import GenericLLM
 _instances = {}
 
 
+def _has_input_placeholder(value) -> bool:
+    """Profile-owned request inputs stay protected even with custom wire keys."""
+    if isinstance(value, str):
+        return any(token in value for token in ("$MODEL", "$PROMPT", "$QUERY", "$DOCUMENTS", "$API_KEY"))
+    if isinstance(value, dict):
+        return any(_has_input_placeholder(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_input_placeholder(item) for item in value)
+    return False
+
+
 def _get_instance(capability: str) -> GenericLLM:
     if capability not in _instances:
         config = get_model_config(capability)
@@ -48,9 +59,8 @@ def get_llm_instance(capability: str = "chat"):
 def get_chat_instance_with_body(cache_key: str, extra_body: dict) -> GenericLLM:
     """Chat client whose request body carries deployment-specific options.
 
-    Body extensions may only *add* provider options: the protocol inputs owned by
-    the profile (model, messages, stream, ...) cannot be replaced from here, so a
-    caller cannot accidentally turn a chat call into a different request.
+    Provider options (including existing thinking settings) may be overridden.
+    Protocol inputs and profile-specific input templates cannot be replaced.
     """
     key = f"chat:{cache_key}"
     if key not in _instances:
@@ -65,9 +75,11 @@ def get_chat_instance_with_body(cache_key: str, extra_body: dict) -> GenericLLM:
             raise ValueError(describe_missing_fields("chat", missing))
         body = dataclasses.asdict(config)
         overrides = dict(extra_body or {})
-        reserved = set(body.get("body", {})) | {
+        reserved = {
             "model", "messages", "input", "query", "documents", "stream",
         }
+        reserved.update(name for name, value in body.get("body", {}).items()
+                        if _has_input_placeholder(value))
         overlap = reserved.intersection(overrides)
         if overlap:
             raise ValueError(f"chat: body overrides reserved fields: {', '.join(sorted(overlap))}")
