@@ -69,7 +69,7 @@ without touching the retrieval code.
 | Key | Default | Meaning |
 |---|---|---|
 | `retrieval.vector.enabled` | `false` | Turns embedding recall on |
-| `retrieval.vector.top_k` | `20` | Recall depth handed to rerank and the final choice |
+| `retrieval.vector.top_k` | `5` | Recall depth handed to rerank and the final choice |
 | `retrieval.vector.min_score` | `0.0` | Minimum cosine similarity to keep a candidate |
 | `retrieval.vector.rerank` | `false` | Reorder candidates with the `rerank` model |
 | `retrieval.vector.llm_final` | `true` | Let the LLM choose among the candidates |

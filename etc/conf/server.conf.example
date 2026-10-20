@@ -53,7 +53,7 @@ agent_registry.client_key_password_env=REGISTRY_CLIENT_KEY_PASSWORD
 # ---------------------------------------------------------------------------
 retrieval.vector.enabled=false
 # Recall depth handed to the reranker and the final selection.
-retrieval.vector.top_k=20
+retrieval.vector.top_k=5
 # Drop candidates below this cosine similarity; 0.0 keeps every candidate.
 retrieval.vector.min_score=0.0
 # Requires a working "rerank" model in etc/config/models.yaml.

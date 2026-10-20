@@ -68,7 +68,7 @@ class VectorSettings:
     """Resolved ``retrieval.vector.*`` options."""
 
     enabled: bool = False
-    top_k: int = 20
+    top_k: int = 5
     min_score: float = 0.0
     rerank: bool = False
     llm_final: bool = True
@@ -80,7 +80,7 @@ class VectorSettings:
     def from_config(cls, conf) -> "VectorSettings":
         return cls(
             enabled=_flag(conf, "retrieval.vector.enabled", False),
-            top_k=_positive_int(conf, "retrieval.vector.top_k", 20),
+            top_k=_positive_int(conf, "retrieval.vector.top_k", 5),
             min_score=_score(conf, "retrieval.vector.min_score", 0.0),
             rerank=_flag(conf, "retrieval.vector.rerank", False),
             llm_final=_flag(conf, "retrieval.vector.llm_final", True),

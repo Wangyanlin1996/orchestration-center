@@ -92,7 +92,7 @@ class TestVectorSettings:
     def test_defaults_keep_vector_search_off(self):
         settings = VectorSettings()
         assert settings.enabled is False
-        assert settings.top_k == 20
+        assert settings.top_k == 5
         assert settings.min_score == 0.0
         assert settings.rerank is False
         assert settings.llm_final is True

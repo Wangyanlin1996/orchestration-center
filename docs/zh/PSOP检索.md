@@ -56,7 +56,7 @@ PSOP 目录是唯一的真相源。embedding 索引只是缓存，可以随时�
 | 键 | 默认值 | 含义 |
 |---|---|---|
 | `retrieval.vector.enabled` | `false` | 是否开启 embedding 召回 |
-| `retrieval.vector.top_k` | `20` | 交给重排与终选的召回深度 |
+| `retrieval.vector.top_k` | `5` | 交给重排与终选的召回深度 |
 | `retrieval.vector.min_score` | `0.0` | 保留候选的最低余弦相似度 |
 | `retrieval.vector.rerank` | `false` | 用 `rerank` 模型重排候选 |
 | `retrieval.vector.llm_final` | `true` | 由 LLM 在候选内做最终选择 |
