@@ -45,6 +45,37 @@ def get_llm_instance(capability: str = "chat"):
     return _get_instance(capability)
 
 
+def get_chat_instance_with_body(cache_key: str, extra_body: dict) -> GenericLLM:
+    """Chat client whose request body carries deployment-specific options.
+
+    Body extensions may only *add* provider options: the protocol inputs owned by
+    the profile (model, messages, stream, ...) cannot be replaced from here, so a
+    caller cannot accidentally turn a chat call into a different request.
+    """
+    key = f"chat:{cache_key}"
+    if key not in _instances:
+        config = get_model_config("chat")
+        if config is None:
+            raise ValueError(
+                "No model configured for capability 'chat' "
+                "(check etc/config/models.yaml or LLM_CONFIG_FILE)"
+            )
+        missing = missing_required_fields(config)
+        if missing:
+            raise ValueError(describe_missing_fields("chat", missing))
+        body = dataclasses.asdict(config)
+        overrides = dict(extra_body or {})
+        reserved = set(body.get("body", {})) | {
+            "model", "messages", "input", "query", "documents", "stream",
+        }
+        overlap = reserved.intersection(overrides)
+        if overlap:
+            raise ValueError(f"chat: body overrides reserved fields: {', '.join(sorted(overlap))}")
+        body["body"] = {**body.get("body", {}), **overrides}
+        _instances[key] = GenericLLM(body)
+    return _instances[key]
+
+
 def get_embed_instance():
     return _get_instance("embed")
 

@@ -40,3 +40,33 @@ agent_registry.ca_file=
 agent_registry.client_cert=
 agent_registry.client_key=
 agent_registry.client_key_password_env=REGISTRY_CLIENT_KEY_PASSWORD
+
+# ---------------------------------------------------------------------------
+# PSOP intent retrieval
+#
+# The PSOP catalog stays the source of truth; the embedding index is a derived
+# cache that may be deleted and rebuilt at any time.
+#
+# retrieval.vector.enabled=false keeps today's behaviour: the LLM reads the whole
+# catalog on every search. When enabled, the search recalls with embeddings,
+# optionally reranks, then lets the LLM choose among the recalled candidates.
+# ---------------------------------------------------------------------------
+retrieval.vector.enabled=false
+# Recall depth handed to the reranker and the final selection.
+retrieval.vector.top_k=20
+# Drop candidates below this cosine similarity; 0.0 keeps every candidate.
+retrieval.vector.min_score=0.0
+# Requires a working "rerank" model in etc/config/models.yaml.
+retrieval.vector.rerank=false
+# true: the LLM chooses the final answer among the recalled candidates.
+# false: return the vector (or rerank) order and skip the extra chat call.
+retrieval.vector.llm_final=true
+# true: fail the search when embeddings are unavailable instead of degrading to
+# the LLM-only path. Either way the catalog, never the index, answers the query.
+retrieval.vector.strict=false
+retrieval.vector.index_file=data/vector_index/psop_vectors.json
+# Selecting a PSOP is a classification task, and thinking dominates its latency:
+# a measured call over 22 candidates took 24 s with reasoning versus 1.2 s
+# without, for the same top-3 result. Set this to false only on gateways that
+# accept body {"thinking": {"type": "disabled"}}; others will reject the call.
+retrieval.llm.thinking=true

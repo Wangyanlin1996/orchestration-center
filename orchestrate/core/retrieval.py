@@ -21,12 +21,23 @@ from typing import Optional, List
 
 from loguru import logger
 
-from common.llm import get_llm_instance
+from common.llm import (
+    get_chat_instance_with_body,
+    get_embed_instance,
+    get_llm_instance,
+    get_rerank_instance,
+)
 from common.util.json_utils import parse_llm_json_response
 from orchestrate.core.model.preflow import PreFlow
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.persistence import WorkflowStorage
 from orchestrate.core.prompts import get_retrieve_psop_prompt
+from orchestrate.core.psop_vector_index import (
+    PsopVectorIndex,
+    VectorSettings,
+    psop_document,
+    vector_settings,
+)
 from orchestrate.core.workflow_search_result import WorkflowSearchResult
 from orchestrate.persistence import current_context
 
@@ -53,6 +64,7 @@ class WorkflowRetrieval:
         # (tests inject a temporary one); in the database modes it is the
         # configured backend's repository. See PersistenceBackend.psops_for.
         self._psops = (context or current_context()).psops_for(storage)
+        self._vector_index_cache = None
 
     def _list_psop_summaries(self) -> List[WorkflowSearchResult]:
         return self._psops.list_summaries()
@@ -212,8 +224,137 @@ class WorkflowRetrieval:
         except Exception as e:
             raise Exception(f"Failed to retrieve PSOP by intent: {e}") from e
 
+    # -- optional embedding recall (retrieval.vector.enabled) ----------------
+
+    @staticmethod
+    def _embed_model_name() -> str:
+        from common.llm.config.llm_config import get_model_config
+
+        config = get_model_config("embed")
+        return str(getattr(config, "model", "") or "")
+
+    def _vector_index(self, settings: VectorSettings) -> PsopVectorIndex:
+        model = self._embed_model_name()
+        key = (settings.index_file, model)
+        if self._vector_index_cache is None or self._vector_index_cache[0] != key:
+            self._vector_index_cache = (key, PsopVectorIndex(settings.index_file, model=model))
+        return self._vector_index_cache[1]
+
+    def _retrieval_llm(self):
+        """Retrieval is a classification task; thinking is opt-in per deployment."""
+        if vector_settings().thinking:
+            return get_llm_instance()
+        return get_chat_instance_with_body("retrieval_no_thinking", {"thinking": {"type": "disabled"}})
+
+    def _vector_retrieve(self, user_intent: str, top_n: int) -> List[WorkflowSearchResult]:
+        """Recall with embeddings, rerank optionally, then let the LLM choose."""
+        settings = vector_settings()
+        summaries = self._list_psop_summaries()
+        if not summaries:
+            return []
+
+        embedder = get_embed_instance()
+        index = self._vector_index(settings)
+        index.reconcile(summaries, embedder.embed)
+        query_vector = embedder.embed(user_intent)
+
+        hits = index.search(query_vector, settings.top_k, settings.min_score)
+        by_id = {summary.workflow_id: summary for summary in summaries}
+        candidates = [
+            by_id[workflow_id].model_copy(update={"score": score})
+            for workflow_id, score in hits if workflow_id in by_id
+        ]
+        logger.info(f"[Retrieval] Vector recall returned {len(candidates)} of {len(summaries)} PSOP(s)")
+        if not candidates:
+            return []
+        if settings.rerank:
+            candidates = self._rerank_candidates(user_intent, candidates)
+        if not settings.llm_final:
+            return candidates[:top_n]
+        return self._select_with_llm(user_intent, candidates, top_n)
+
+    def _rerank_candidates(
+        self, user_intent: str, candidates: List[WorkflowSearchResult],
+    ) -> List[WorkflowSearchResult]:
+        """Reorder recalled candidates; any reranker problem keeps vector order."""
+        try:
+            reranked = get_rerank_instance().rerank(
+                user_intent, [psop_document(candidate) for candidate in candidates]
+            )
+        except Exception as exc:
+            logger.warning(f"[Retrieval] Rerank failed, keeping vector order: {exc}")
+            return candidates
+        if not reranked:
+            logger.warning("[Retrieval] Reranker returned no order, keeping vector order")
+            return candidates
+
+        ordered: List[WorkflowSearchResult] = []
+        for item in reranked:
+            if not isinstance(item, dict):
+                continue
+            try:
+                position = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= position < len(candidates):
+                continue
+            score = item.get("relevance_score", item.get("score", candidates[position].score))
+            try:
+                ordered.append(candidates[position].model_copy(update={"score": float(score)}))
+            except (TypeError, ValueError):
+                ordered.append(candidates[position])
+        return ordered or candidates
+
+    def _select_with_llm(
+        self, user_intent: str, candidates: List[WorkflowSearchResult], top_n: int,
+    ) -> List[WorkflowSearchResult]:
+        """Final choice among recalled candidates; failures keep the vector order."""
+        rows = [{
+            "name": summary.name,
+            "description": summary.description or "",
+            "tags": summary.tags or [],
+            "user_intent": summary.user_intent or "",
+            "tasks": summary.tasks_summary or "",
+            "id": summary.workflow_id,
+        } for summary in candidates]
+        prompt = get_retrieve_psop_prompt(
+            user_intent,
+            json.dumps(rows, ensure_ascii=False, indent=2),
+            top_n,
+            lang=_detect_intent_lang(user_intent),
+        )
+        try:
+            _, response = self._retrieval_llm().ask_llm(prompt)
+            names = parse_llm_json_response(response)
+        except Exception as exc:
+            logger.warning(f"[Retrieval] Final selection failed, keeping vector order: {exc}")
+            return candidates[:top_n]
+        if not isinstance(names, list):
+            return candidates[:top_n]
+
+        by_name = {candidate.name: candidate for candidate in candidates}
+        selected = [by_name[name] for name in names if isinstance(name, str) and name in by_name]
+        if not selected:
+            logger.warning("[Retrieval] LLM selected no recalled candidate; keeping vector order")
+            return candidates[:top_n]
+        return selected[:top_n]
+
+    def _vector_or_fallback(self, user_intent: str, top_n: int):
+        """Vector results, or None when the caller must use the LLM path."""
+        try:
+            return self._vector_retrieve(user_intent, top_n)
+        except Exception as exc:
+            if vector_settings().strict:
+                raise
+            logger.error(f"[Retrieval] Vector retrieval unavailable, using the LLM path: {exc}")
+            return None
+
     def retrieve_psop_by_intent(self, user_intent: str) -> Optional[PSOP]:
         logger.info("[Retrieval] retrieve_psop_by_intent: length={}", len(user_intent))
+        if vector_settings().enabled:
+            vector_results = self._vector_or_fallback(user_intent, 1)
+            if vector_results is not None:
+                return self._load_psop_by_id(vector_results[0].workflow_id) if vector_results else None
         try:
             names = self._retrieve_names_by_intent(user_intent, top_n=1)
             if not names:
@@ -232,6 +373,11 @@ class WorkflowRetrieval:
         self, user_intent: str, top_n: int = 5
     ) -> List[WorkflowSearchResult]:
         logger.info("[Retrieval] retrieve_psop_by_intent_topn: length={}, top_n={}", len(user_intent), top_n)
+        if vector_settings().enabled:
+            vector_results = self._vector_or_fallback(user_intent, top_n)
+            if vector_results is not None:
+                logger.info(f"[Retrieval] TopN returned {len(vector_results)} result(s) via embeddings")
+                return vector_results[:top_n]
         try:
             names = self._retrieve_names_by_intent(user_intent, top_n)
             name_to_summary = {s.name: s for s in self._list_psop_summaries()}
