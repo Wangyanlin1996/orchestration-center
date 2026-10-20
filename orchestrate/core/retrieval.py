@@ -246,7 +246,7 @@ class WorkflowRetrieval:
             return get_llm_instance()
         return get_chat_instance_with_body("retrieval_no_thinking", {"thinking": {"type": "disabled"}})
 
-    def _vector_retrieve(self, user_intent: str, top_n: int) -> List[WorkflowSearchResult]:
+    def _vector_retrieve(self, user_intent: str, top_n: int) -> Optional[List[WorkflowSearchResult]]:
         """Recall with embeddings, rerank optionally, then let the LLM choose."""
         settings = vector_settings()
         summaries = self._list_psop_summaries()
@@ -266,7 +266,14 @@ class WorkflowRetrieval:
         ]
         logger.info(f"[Retrieval] Vector recall returned {len(candidates)} of {len(summaries)} PSOP(s)")
         if not candidates:
-            return []
+            # An empty recall is a degraded result, not a definitive "no match":
+            # min_score can filter the whole corpus, and the catalog must still
+            # answer. Report it so the caller keeps the catalog path.
+            logger.warning(
+                f"[Retrieval] Recall filtered every PSOP at min_score={settings.min_score}; "
+                "falling back to the catalog path"
+            )
+            return None
         if settings.rerank:
             candidates = self._rerank_candidates(user_intent, candidates)
         if not settings.llm_final:
@@ -289,6 +296,7 @@ class WorkflowRetrieval:
             return candidates
 
         ordered: List[WorkflowSearchResult] = []
+        seen = set()
         for item in reranked:
             if not isinstance(item, dict):
                 continue
@@ -298,11 +306,15 @@ class WorkflowRetrieval:
                 continue
             if not 0 <= position < len(candidates):
                 continue
-            score = item.get("relevance_score", item.get("score", candidates[position].score))
+            candidate = candidates[position]
+            if candidate.workflow_id in seen:
+                continue
+            seen.add(candidate.workflow_id)
+            score = item.get("relevance_score", item.get("score", candidate.score))
             try:
-                ordered.append(candidates[position].model_copy(update={"score": float(score)}))
+                ordered.append(candidate.model_copy(update={"score": float(score)}))
             except (TypeError, ValueError):
-                ordered.append(candidates[position])
+                ordered.append(candidate)
         return ordered or candidates
 
     def _select_with_llm(
@@ -332,8 +344,23 @@ class WorkflowRetrieval:
         if not isinstance(names, list):
             return candidates[:top_n]
 
-        by_name = {candidate.name: candidate for candidate in candidates}
-        selected = [by_name[name] for name in names if isinstance(name, str) and name in by_name]
+        by_id = {candidate.workflow_id: candidate for candidate in candidates}
+        # Candidates arrive in score order, so of two PSOPs sharing a name the
+        # first is the better match; setdefault keeps it instead of the last one.
+        by_name: dict = {}
+        for candidate in candidates:
+            by_name.setdefault(candidate.name, candidate)
+
+        selected: List[WorkflowSearchResult] = []
+        seen = set()
+        for name in names:
+            if not isinstance(name, str):
+                continue
+            candidate = by_id.get(name) or by_name.get(name)
+            if candidate is None or candidate.workflow_id in seen:
+                continue
+            seen.add(candidate.workflow_id)
+            selected.append(candidate)
         if not selected:
             logger.warning("[Retrieval] LLM selected no recalled candidate; keeping vector order")
             return candidates[:top_n]

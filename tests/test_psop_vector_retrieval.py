@@ -161,15 +161,18 @@ class TestVectorPath:
         # Only the new query is embedded; the PSOP catalog stays cached.
         assert len(embedder.calls) == 4
 
-    def test_min_score_can_filter_everything(self, tmp_path):
+    def test_empty_recall_falls_back_to_the_catalog(self, tmp_path):
+        """A min_score above the corpus similarity must not read as "no match"."""
         retrieval = _retrieval()
         with patch("orchestrate.core.retrieval.vector_settings",
                    return_value=_settings(tmp_path, min_score=0.9, llm_final=False)), \
              patch.object(retrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch.object(retrieval, "_retrieve_names_by_intent", return_value=[CORE]) as catalog, \
              patch("orchestrate.core.retrieval.get_embed_instance", return_value=_CountingEmbedder()):
             results = retrieval.retrieve_psop_by_intent_topn("完全无关的意图", top_n=2)
 
-        assert results == []
+        assert [result.workflow_id for result in results] == ["core"]
+        catalog.assert_called_once()
 
     def test_single_result_api_uses_the_vector_path(self, tmp_path):
         retrieval = _retrieval()
@@ -281,6 +284,69 @@ class TestFailureHandling:
             results = retrieval.retrieve_psop_by_intent_topn("核心网故障处理", top_n=2)
 
         assert [result.workflow_id for result in results] == ["core", "transport"]
+
+
+# ---------------------------------------------------------------------------
+# duplicate handling: shared names and repeated rerank indexes
+# ---------------------------------------------------------------------------
+
+class TestDuplicateHandling:
+    """Two PSOPs can share a name, and a reranker can repeat an index."""
+
+    def _same_name_summaries(self):
+        return [
+            _summary("core-v1", CORE, "core network"),
+            _summary("core-v2", CORE, "core network backup"),
+        ]
+
+    def test_duplicate_rerank_index_does_not_repeat_a_psop(self, tmp_path):
+        retrieval = _retrieval()
+        reranker = MagicMock()
+        reranker.rerank.return_value = [
+            {"index": 0, "relevance_score": 0.9},
+            {"index": 0, "relevance_score": 0.8},
+        ]
+        with patch("orchestrate.core.retrieval.vector_settings",
+                   return_value=_settings(tmp_path, rerank=True, llm_final=False)), \
+             patch.object(retrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=_CountingEmbedder()), \
+             patch("orchestrate.core.retrieval.get_rerank_instance", return_value=reranker):
+            results = retrieval.retrieve_psop_by_intent_topn("核心网故障处理", top_n=2)
+
+        assert [result.workflow_id for result in results] == ["core"]
+
+    def test_duplicate_names_keep_the_better_ranked_psop(self, tmp_path):
+        retrieval = _retrieval()
+        with patch("orchestrate.core.retrieval.vector_settings", return_value=_settings(tmp_path)), \
+             patch.object(retrieval, "_list_psop_summaries",
+                          return_value=self._same_name_summaries()), \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=_CountingEmbedder()), \
+             patch("orchestrate.core.retrieval.get_llm_instance", return_value=_FakeLLM([CORE])):
+            results = retrieval.retrieve_psop_by_intent_topn("核心网故障处理", top_n=1)
+
+        assert [result.workflow_id for result in results] == ["core-v1"]
+
+    def test_selection_resolves_an_id_token(self, tmp_path):
+        """The prompt carries the id, so honour it when the model echoes one."""
+        retrieval = _retrieval()
+        with patch("orchestrate.core.retrieval.vector_settings", return_value=_settings(tmp_path)), \
+             patch.object(retrieval, "_list_psop_summaries",
+                          return_value=self._same_name_summaries()), \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=_CountingEmbedder()), \
+             patch("orchestrate.core.retrieval.get_llm_instance", return_value=_FakeLLM(["core-v2"])):
+            results = retrieval.retrieve_psop_by_intent_topn("核心网故障处理", top_n=1)
+
+        assert [result.workflow_id for result in results] == ["core-v2"]
+
+    def test_repeated_selection_does_not_repeat_a_psop(self, tmp_path):
+        retrieval = _retrieval()
+        with patch("orchestrate.core.retrieval.vector_settings", return_value=_settings(tmp_path)), \
+             patch.object(retrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=_CountingEmbedder()), \
+             patch("orchestrate.core.retrieval.get_llm_instance", return_value=_FakeLLM([CORE, CORE])):
+            results = retrieval.retrieve_psop_by_intent_topn("核心网故障处理", top_n=2)
+
+        assert [result.workflow_id for result in results] == ["core"]
 
 
 # ---------------------------------------------------------------------------

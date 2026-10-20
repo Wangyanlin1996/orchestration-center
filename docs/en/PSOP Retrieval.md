@@ -76,6 +76,7 @@ switch is turned on. `rerank` is only read when `retrieval.vector.rerank=true`.
 |---|---|
 | Embedding model unavailable, `strict=false` | Warning, then the LLM path answers the query |
 | Embedding model unavailable, `strict=true` | The error propagates to the caller |
+| Recall filters every candidate, e.g. `min_score` above the corpus similarity | Warning, then the LLM path answers |
 | Reranker unavailable or returning no order | Warning, then the vector order is kept |
 | Final selection call fails or names nothing recalled | Warning, then the vector order is kept |
 | Index file corrupt or unwritable | Warning, then rebuild or in-memory index |
