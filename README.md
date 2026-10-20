@@ -139,6 +139,8 @@ MySQL setup, storage boundaries and container instructions: [MySQL persistence](
 
 SPG batch import, default-library readiness and safe upgrade of installed examples: [SPG import](docs/en/SPG%20Import.md). Default AN L4 AgentCards are a planning catalog, not deployed business agents.
 
+PSOP intent retrieval, the optional embedding recall switch and how it degrades: [PSOP retrieval](docs/en/PSOP%20Retrieval.md).
+
 ## Quick Start
 
 ### Prerequisites
