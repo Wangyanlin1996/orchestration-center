@@ -9,7 +9,9 @@ behaviour must stay byte-for-byte identical to the LLM-only path.
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Barrier
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +19,16 @@ import pytest
 from orchestrate.core.psop_vector_index import VectorSettings
 from orchestrate.core.retrieval import WorkflowRetrieval
 from orchestrate.core.workflow_search_result import WorkflowSearchResult
+from common.llm.config.llm_config import ModelConfig
+
+
+@pytest.fixture(autouse=True)
+def synthetic_embedding_config():
+    """Never read a developer's model settings in deterministic retrieval tests."""
+    with patch("common.llm.config.llm_config.get_model_config", return_value=ModelConfig(
+        model="synthetic-embed", url="https://example.invalid/embed", body={"input": "$PROMPT"},
+    )) as config:
+        yield config
 
 
 CORE = "Core Network Fault Management"
@@ -117,6 +129,70 @@ class TestSwitchOff:
 # ---------------------------------------------------------------------------
 
 class TestVectorPath:
+    def test_queries_embed_concurrently_but_share_one_complete_index(self, tmp_path):
+        retrieval = _retrieval()
+        queries = Barrier(2)
+        embedder = MagicMock()
+
+        def embed(text):
+            if not text.startswith("name:"):
+                queries.wait(timeout=3)
+            return _fake_embed(text)
+
+        embedder.embed.side_effect = embed
+        with patch("orchestrate.core.retrieval.vector_settings",
+                   return_value=_settings(tmp_path, llm_final=False, strict=True)), \
+             patch.object(retrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=embedder), \
+             ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(retrieval.retrieve_psop_by_intent_topn, "core query") for _ in range(2)]
+            assert [[r.workflow_id for r in future.result(timeout=5)] for future in futures] == [
+                ["core", "transport"], ["core", "transport"],
+            ]
+        assert embedder.embed.call_count == 4  # two queries, documents built only once
+
+    @pytest.mark.parametrize("field,value", [
+        ("url", "https://other.invalid/embed"),
+        ("body", {"input": "$PROMPT", "dimensions": 3}),
+        ("response", {"embedding": "vectors[0]"}),
+    ])
+    def test_vector_space_config_change_invalidates_same_dimension_cache(
+        self, tmp_path, synthetic_embedding_config, field, value,
+    ):
+        retrieval = _retrieval()
+        embedder = _CountingEmbedder()
+        with patch("orchestrate.core.retrieval.vector_settings",
+                   return_value=_settings(tmp_path, llm_final=False)), \
+             patch.object(WorkflowRetrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=embedder):
+            retrieval.retrieve_psop_by_intent_topn("core query")
+            setattr(synthetic_embedding_config.return_value, field, value)
+            embedder.calls.clear()
+            retrieval.retrieve_psop_by_intent_topn("core query")
+            assert len(embedder.calls) == 3
+            # Persisted identity also protects a process restarted after a switch.
+            synthetic_embedding_config.return_value.url = "https://third.invalid/embed"
+            embedder.calls.clear()
+            _retrieval().retrieve_psop_by_intent_topn("core query")
+            assert len(embedder.calls) == 3
+        cache = (tmp_path / "psop_vectors.json").read_text()
+        assert "third.invalid" not in cache
+        assert "dimensions" not in cache
+
+    def test_auth_rotation_does_not_invalidate_vectors(self, tmp_path, synthetic_embedding_config):
+        retrieval = _retrieval()
+        embedder = _CountingEmbedder()
+        with patch("orchestrate.core.retrieval.vector_settings",
+                   return_value=_settings(tmp_path, llm_final=False)), \
+             patch.object(retrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=embedder):
+            retrieval.retrieve_psop_by_intent_topn("core query")
+            synthetic_embedding_config.return_value.api_key = "synthetic-rotated-secret"
+            embedder.calls.clear()
+            retrieval.retrieve_psop_by_intent_topn("core query")
+        assert len(embedder.calls) == 1
+        assert "synthetic-rotated-secret" not in (tmp_path / "psop_vectors.json").read_text()
+
     def test_recall_then_llm_final_choice(self, tmp_path):
         retrieval = _retrieval()
         embedder = _CountingEmbedder()
@@ -242,6 +318,66 @@ class TestRerank:
 # ---------------------------------------------------------------------------
 
 class TestFailureHandling:
+    @pytest.mark.parametrize("single", [False, True])
+    def test_explicit_no_match_is_not_replaced_by_vector_candidates(self, tmp_path, single):
+        retrieval = _retrieval()
+        with patch("orchestrate.core.retrieval.vector_settings", return_value=_settings(tmp_path)), \
+             patch.object(retrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch.object(retrieval, "_retrieve_names_by_intent") as catalog, \
+             patch.object(retrieval, "_load_psop_by_id") as loader, \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=_CountingEmbedder()), \
+             patch("orchestrate.core.retrieval.get_llm_instance", return_value=_FakeLLM([])):
+            if single:
+                assert retrieval.retrieve_psop_by_intent("unrelated intent") is None
+            else:
+                assert retrieval.retrieve_psop_by_intent_topn("unrelated intent") == []
+        catalog.assert_not_called()
+        loader.assert_not_called()
+
+    @pytest.mark.parametrize("strict", [False, True])
+    @pytest.mark.parametrize("restart", [False, True])
+    def test_query_dimension_drift_rebuilds_unchanged_catalog(self, tmp_path, strict, restart):
+        retrieval = _retrieval()
+        settings = _settings(tmp_path, strict=strict, llm_final=False)
+        dimension = 2
+        embedder = MagicMock()
+        embedder.embed.side_effect = lambda _: [1.0] + [0.0] * (dimension - 1)
+        with patch("orchestrate.core.retrieval.vector_settings", return_value=settings), \
+             patch.object(WorkflowRetrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch.object(WorkflowRetrieval, "_retrieve_names_by_intent") as catalog, \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=embedder):
+            retrieval.retrieve_psop_by_intent_topn("core query")
+            dimension = 3
+            if restart:
+                retrieval = _retrieval()
+            embedder.reset_mock()
+            results = retrieval.retrieve_psop_by_intent_topn("core query")
+            assert [r.workflow_id for r in results] == ["core", "transport"]
+            assert embedder.embed.call_count == 3  # query + two documents, no retry loop
+            retrieval.retrieve_psop_by_intent_topn("core query")
+            assert embedder.embed.call_count == 4  # rebuilt cache is reused
+            catalog.assert_not_called()
+        assert json.loads((tmp_path / "psop_vectors.json").read_text())["dim"] == 3
+
+    @pytest.mark.parametrize("strict", [False, True])
+    def test_inconsistent_query_provider_has_bounded_recovery(self, tmp_path, strict):
+        retrieval = _retrieval()
+        embedder = MagicMock()
+        embedder.embed.side_effect = lambda text: [1.0, 0.0] if text.startswith("name:") else [1.0, 0.0, 0.0]
+        with patch("orchestrate.core.retrieval.vector_settings",
+                   return_value=_settings(tmp_path, strict=strict, llm_final=False)), \
+             patch.object(retrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch.object(retrieval, "_retrieve_names_by_intent", return_value=[CORE]) as catalog, \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=embedder):
+            if strict:
+                with pytest.raises(ValueError, match="dimension"):
+                    retrieval.retrieve_psop_by_intent_topn("core query")
+                catalog.assert_not_called()
+            else:
+                assert retrieval.retrieve_psop_by_intent_topn("core query")[0].workflow_id == "core"
+                catalog.assert_called_once()
+        assert embedder.embed.call_count == 5  # initial docs + query + one rebuild only
+
     def test_embedding_failure_falls_back_to_the_llm_path(self, tmp_path):
         retrieval = _retrieval()
         with patch("orchestrate.core.retrieval.vector_settings", return_value=_settings(tmp_path)), \
@@ -354,6 +490,21 @@ class TestDuplicateHandling:
 # ---------------------------------------------------------------------------
 
 class TestRetrievalThinking:
+    @pytest.mark.parametrize("enabled,fail", [(False, False), (True, True)])
+    def test_catalog_and_failure_fallback_respect_thinking_policy(self, tmp_path, enabled, fail):
+        retrieval = _retrieval()
+        llm = _FakeLLM([CORE])
+        with patch("orchestrate.core.retrieval.vector_settings",
+                   return_value=_settings(tmp_path, enabled=enabled, thinking=False)), \
+             patch.object(retrieval, "_list_psop_summaries", return_value=_summaries()), \
+             patch("orchestrate.core.retrieval.get_embed_instance", return_value=_CountingEmbedder(fail=fail)), \
+             patch("orchestrate.core.retrieval.get_llm_instance") as shared, \
+             patch("orchestrate.core.retrieval.get_chat_instance_with_body", return_value=llm) as extended:
+            assert retrieval.retrieve_psop_by_intent_topn("core query")[0].workflow_id == "core"
+        shared.assert_not_called()
+        extended.assert_called_once_with("retrieval_no_thinking", {"thinking": {"type": "disabled"}})
+        assert len(llm.calls) == 1
+
     def test_thinking_enabled_uses_the_shared_chat_instance(self, tmp_path):
         retrieval = _retrieval()
         llm = _FakeLLM([CORE])

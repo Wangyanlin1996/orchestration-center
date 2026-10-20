@@ -22,6 +22,14 @@ import pytest
 
 from orchestrate.core.retrieval import WorkflowRetrieval, _detect_intent_lang
 from orchestrate.persistence.file_backend import FilePsopRepository
+from orchestrate.core.psop_vector_index import VectorSettings
+
+
+@pytest.fixture(autouse=True)
+def catalog_retrieval_settings():
+    """These tests exercise the catalog path, independently of deployment config."""
+    with patch("orchestrate.core.retrieval.vector_settings", return_value=VectorSettings()):
+        yield
 
 
 # ---------------------------------------------------------------------------

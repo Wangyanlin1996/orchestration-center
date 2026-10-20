@@ -69,4 +69,6 @@ retrieval.vector.index_file=data/vector_index/psop_vectors.json
 # a measured call over 22 candidates took 24 s with reasoning versus 1.2 s
 # without, for the same top-3 result. Set this to false only on gateways that
 # accept body {"thinking": {"type": "disabled"}}; others will reject the call.
+# Applies to catalog selection, vector final selection and failure fallback.
+# true keeps the model defaults; false overrides only retrieval calls.
 retrieval.llm.thinking=true

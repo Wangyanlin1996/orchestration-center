@@ -134,6 +134,71 @@ class TestVectorSettings:
 # ---------------------------------------------------------------------------
 
 class TestReconcile:
+    def test_version_one_cache_is_rebuilt_once(self, tmp_path):
+        path = tmp_path / "idx.json"
+        summary = _summary("a")
+        path.write_text(json.dumps({
+            "version": 1, "model": "m", "dim": 2,
+            "entries": {"a": {"hash": content_hash(psop_document(summary)), "vector": [0.0, 1.0]}},
+        }), encoding="utf-8")
+        calls = []
+        embed = lambda text: (calls.append(text), [1.0, 0.0])[1]
+        PsopVectorIndex(path, model="m").reconcile([summary], embed)
+        PsopVectorIndex(path, model="m").reconcile([summary], embed)
+        assert len(calls) == 1
+        assert json.loads(path.read_text())["version"] == 2
+
+    def test_failed_rebuild_preserves_previous_complete_generation(self, tmp_path):
+        path = tmp_path / "idx.json"
+        index = PsopVectorIndex(path, model="m")
+        summaries = [_summary("a"), _summary("b")]
+        index.reconcile(summaries, lambda _: [1.0, 0.0])
+        original = path.read_bytes()
+        calls = []
+
+        def broken(text):
+            calls.append(text)
+            if len(calls) == 3:
+                raise RuntimeError("provider unavailable midway")
+            return [1.0, 0.0, 0.0]
+
+        with pytest.raises(RuntimeError, match="midway"):
+            # First embedding detects drift; the rebuild fails after one row.
+            index.reconcile([_summary("a", description="changed"), _summary("b")], broken)
+        assert path.read_bytes() == original
+        assert [wid for wid, _ in index.search([1.0, 0.0], top_k=2)] == ["a", "b"]
+
+    @pytest.mark.parametrize("vector", [[float("nan"), 0], [float("inf"), 0], [True, 0], ["1", 0]])
+    def test_invalid_provider_vectors_never_enter_cache(self, tmp_path, vector):
+        path = tmp_path / "idx.json"
+        index = PsopVectorIndex(path, model="m")
+        with pytest.raises(ValueError, match="invalid vector"):
+            index.reconcile([_summary("a")], lambda _: vector)
+        assert not path.exists()
+
+    @pytest.mark.parametrize("vector", [[1.0], ["1", 0], [True, 0], [10**400, 0], [float("nan"), 0],
+                                       [float("inf"), 0], None, {"bad": 1}])
+    def test_malformed_cached_row_is_reembedded_not_silently_dropped(self, tmp_path, vector):
+        path = tmp_path / "idx.json"
+        summaries = [_summary("a"), _summary("b")]
+        PsopVectorIndex(path, model="m").reconcile(summaries, lambda _: [1.0, 0.0])
+        payload = json.loads(path.read_text())
+        payload["entries"]["a"]["vector"] = vector
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        calls = []
+        index = PsopVectorIndex(path, model="m")
+        index.reconcile(summaries, lambda text: (calls.append(text), [1.0, 0.0])[1])
+        assert len(calls) == 1
+        assert [wid for wid, _ in index.search([1.0, 0.0], top_k=2)] == ["a", "b"]
+
+    @pytest.mark.parametrize("payload", [[], None, "invalid", 4])
+    def test_non_object_json_cache_is_rebuilt(self, tmp_path, payload):
+        path = tmp_path / "idx.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        index = PsopVectorIndex(path, model="m")
+        index.reconcile([_summary("a")], lambda _: [1.0, 0.0])
+        assert index.search([1.0, 0.0], top_k=1)[0][0] == "a"
+
     def test_first_pass_embeds_every_psop(self, tmp_path):
         index = PsopVectorIndex(tmp_path / "idx.json", model="m")
         calls = []
