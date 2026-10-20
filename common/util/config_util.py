@@ -56,6 +56,14 @@ def apply_env_overrides(config: dict) -> None:
         "REGISTRY_CLIENT_KEY": "agent_registry.client_key",
         "REGISTRY_CLIENT_KEY_PASSWORD_ENV": "agent_registry.client_key_password_env",
         "AGENT_REGISTRY_URL": "agent_registry_url", "PERSISTENCE_MODE": "persistence_mode",
+        "RETRIEVAL_VECTOR_ENABLED": "retrieval.vector.enabled",
+        "RETRIEVAL_VECTOR_TOP_K": "retrieval.vector.top_k",
+        "RETRIEVAL_VECTOR_MIN_SCORE": "retrieval.vector.min_score",
+        "RETRIEVAL_VECTOR_RERANK": "retrieval.vector.rerank",
+        "RETRIEVAL_VECTOR_LLM_FINAL": "retrieval.vector.llm_final",
+        "RETRIEVAL_VECTOR_STRICT": "retrieval.vector.strict",
+        "RETRIEVAL_VECTOR_INDEX_FILE": "retrieval.vector.index_file",
+        "RETRIEVAL_LLM_THINKING": "retrieval.llm.thinking",
     }
     for name, key in aliases.items():
         if name in os.environ:

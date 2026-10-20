@@ -97,6 +97,23 @@ def vector_settings() -> VectorSettings:
     return VectorSettings.from_config(get_conf())
 
 
+def validate_retrieval_config(conf) -> None:
+    """Fail fast for an explicitly enabled but unconfigured retrieval pipeline.
+
+    This only checks local definitions. Runtime provider outages still follow the
+    configured fallback policy; no network request or index build happens here.
+    """
+    settings = VectorSettings.from_config(conf)
+    if not settings.enabled:
+        return
+    from common.llm.config.llm_config import get_model_config, missing_required_fields
+
+    for capability in (["embed", "rerank"] if settings.rerank else ["embed"]):
+        config = get_model_config(capability)
+        if config is None or missing_required_fields(config):
+            raise ValueError(f"Enabled vector retrieval requires a configured '{capability}' model in models.yaml")
+
+
 def psop_document(summary: WorkflowSearchResult) -> str:
     """Text embedded for a PSOP: the same fields the LLM prompt exposes."""
     tags = ", ".join(summary.tags or [])
