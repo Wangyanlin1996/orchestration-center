@@ -183,8 +183,7 @@ async def orchestrate_sop(
         psop.user_intent = sop_text[:200]
         psop.related_preflow = preflow.id
 
-        save_handler = get_storage_handler(InterfaceType.SAVE_PSOP)
-        save_handler.handle(psop)
+        SharedHandlers.save_psop().handle(psop)
         return created(data=psop.model_dump(), message="PSOP generated and saved")
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")
@@ -227,8 +226,7 @@ async def orchestrate_intent(
             abandon_on_cancel=False,
         )
 
-        save_handler = get_storage_handler(InterfaceType.SAVE_PSOP)
-        save_handler.handle(psop)
+        SharedHandlers.save_psop().handle(psop)
         return created(data=psop.model_dump(), message="PSOP generated and saved")
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")

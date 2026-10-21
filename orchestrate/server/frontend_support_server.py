@@ -57,7 +57,7 @@ from orchestrate.agentcard_loader import _normalize_agent_dict
 from common.log.audit_logger import audit_logger, OperationObject, OperationName, LogLevel, OperationResult
 from common.util.config_util import get_conf
 from orchestrate.persistence import current_context
-from orchestrate.persistence.errors import StorageError
+from orchestrate.persistence.errors import RoleReferenceError, StorageError
 from orchestrate.server.storage_error_response import storage_http_exception
 from common.util.password_hash import FILE_HASH_PREFIX, hash_password
 from orchestrate.core.model.preflow import PreFlow
@@ -810,6 +810,11 @@ async def generate_from_intent(
                 'result': OperationResult.SUCCESS,
                 'details': {"id": psop.id, "name": psop.name, "steps_count": len(psop.steps)},
             })
+        except RoleReferenceError:
+            # An unauthorized generated workflow is a failed request, not a
+            # degraded success: the caller must never receive a role PSOP
+            # that the catalog gate refused to persist.
+            raise
         except Exception as save_error:
             logger.warning(f"Auto-save failed (non-fatal): {save_error}")
 

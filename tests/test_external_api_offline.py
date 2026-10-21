@@ -411,3 +411,162 @@ class TestGetExecution:
             mock_reg.get_handler.return_value = mock_handler
             resp = client.get("/api/v1/executions/err")
             assert resp.status_code == 500
+
+
+# ===========================================================================
+# 9. Save-time catalog gate on the generation endpoints (sub-requirement 2)
+# ===========================================================================
+
+from orchestrate.core.catalog_gate import CatalogGate
+from orchestrate.core.model.psop import PSOP
+from orchestrate.core.model.role_catalog import RoleCatalog
+from orchestrate.core.shared_handlers import SharedHandlers
+
+_GATE_SOURCE = dict(package="synthetic", pdf="synthetic.pdf", pdf_pages=[1])
+
+
+def _gate_role_psop(skill="explore", catalog_version="pilot-v1"):
+    return PSOP.model_validate(dict(
+        id=f"wf-{skill}", name="Role demo", catalog_version=catalog_version,
+        steps=[dict(name="optimize", subtasks=[dict(
+            task_id="t1", description="Explore intent", binding="role",
+            agent="optimizer", skill=skill, role_version="1",
+        )])],
+    ))
+
+
+def _gate_instance_psop():
+    return PSOP.model_validate(dict(
+        id="wf-legacy", name="Legacy",
+        steps=[dict(name="work", subtasks=[dict(
+            task_id="t1", description="Do work", binding="instance",
+            agent="Existing Agent", skill="Existing Skill",
+        )])],
+    ))
+
+
+def _gate_catalog(tmp_path, status="approved"):
+    catalog = RoleCatalog.model_validate(dict(
+        catalog_version="pilot-v1",
+        roles=[dict(
+            role_id="optimizer", role_version="1", name="Optimizer",
+            description="Synthetic test role", source=_GATE_SOURCE, review_status=status,
+            skills=[dict(skill_id="explore", name="explore", description="explore",
+                         source=_GATE_SOURCE, review_status=status)],
+        )],
+    ))
+    path = tmp_path / "catalog.json"
+    path.write_text(catalog.model_dump_json(), encoding="utf-8")
+    return str(path)
+
+
+class _RecordingHandler:
+    def __init__(self):
+        self.saved = []
+
+    def handle(self, psop):
+        self.saved.append(psop.id)
+        return psop.id
+
+
+@pytest.fixture
+def gated_save(monkeypatch):
+    """Route SharedHandlers through a real gate over a recording handler."""
+    recording = _RecordingHandler()
+    monkeypatch.setattr(SharedHandlers, "_save_handle", CatalogGate(recording))
+    return recording
+
+
+def _use_catalog(monkeypatch, path):
+    monkeypatch.setattr(
+        "orchestrate.core.catalog_gate.configured_catalog_path", lambda: path)
+
+
+class TestOrchestrateSopCatalogGate:
+    def _generate_role_psop(self, **kwargs):
+        return _gate_role_psop(**kwargs)
+
+    def _post(self, client, monkeypatch, psop):
+        with patch("orchestrate.server.external_api.get_agent_cards", new_callable=AsyncMock) as mock_cards, \
+             patch("orchestrate.server.external_api.PsopGenerator") as mock_gen_class:
+            mock_cards.return_value = [MagicMock()]
+            mock_gen = MagicMock()
+            mock_gen.generate_psop_workflow.return_value = psop
+            mock_gen_class.return_value = mock_gen
+            return client.post("/api/v1/orchestrate/sop", json={"sop_content": "Step 1"})
+
+    def test_approved_reference_saves(self, client, gated_save, monkeypatch, tmp_path):
+        _use_catalog(monkeypatch, _gate_catalog(tmp_path))
+        resp = self._post(client, monkeypatch, self._generate_role_psop())
+        assert resp.status_code == 201
+        assert gated_save.saved == ["wf-explore"]
+
+    def test_draft_reference_rejected_without_persisting(self, client, gated_save, monkeypatch, tmp_path):
+        _use_catalog(monkeypatch, _gate_catalog(tmp_path, status="draft"))
+        resp = self._post(client, monkeypatch, self._generate_role_psop())
+        assert resp.status_code == 422
+        assert "INVALID_ROLE_SKILL" in resp.text
+        assert gated_save.saved == []
+
+    def test_unknown_skill_rejected(self, client, gated_save, monkeypatch, tmp_path):
+        _use_catalog(monkeypatch, _gate_catalog(tmp_path))
+        resp = self._post(client, monkeypatch, self._generate_role_psop(skill="unknown"))
+        assert resp.status_code == 422
+        assert "INVALID_ROLE_SKILL" in resp.text
+        assert gated_save.saved == []
+
+    def test_catalog_version_mismatch_rejected(self, client, gated_save, monkeypatch, tmp_path):
+        _use_catalog(monkeypatch, _gate_catalog(tmp_path))
+        resp = self._post(client, monkeypatch, self._generate_role_psop(catalog_version="pilot-v2"))
+        assert resp.status_code == 422
+        assert "CATALOG_VERSION_UNAVAILABLE" in resp.text
+        assert gated_save.saved == []
+
+    def test_missing_catalog_rejected(self, client, gated_save, monkeypatch):
+        _use_catalog(monkeypatch, None)
+        resp = self._post(client, monkeypatch, self._generate_role_psop())
+        assert resp.status_code == 422
+        assert "CATALOG_VERSION_UNAVAILABLE" in resp.text
+        assert gated_save.saved == []
+
+    def test_legacy_instance_workflow_needs_no_catalog(self, client, gated_save, monkeypatch):
+        _use_catalog(monkeypatch, None)
+        resp = self._post(client, monkeypatch, _gate_instance_psop())
+        assert resp.status_code == 201
+        assert gated_save.saved == ["wf-legacy"]
+
+
+class TestOrchestrateIntentCatalogGate:
+    def _post(self, client, psop):
+        with patch("orchestrate.server.external_api.get_agent_cards", new_callable=AsyncMock) as mock_cards, \
+             patch("orchestrate.server.external_api.IntentPsopGenerator") as mock_gen_class:
+            mock_cards.return_value = [MagicMock()]
+            mock_gen = MagicMock()
+            mock_gen.generate_psop_from_intent.return_value = psop
+            mock_gen_class.return_value = mock_gen
+            return client.post("/api/v1/orchestrate/intent", json={"intent": "optimize energy"})
+
+    def test_approved_reference_saves(self, client, gated_save, monkeypatch, tmp_path):
+        _use_catalog(monkeypatch, _gate_catalog(tmp_path))
+        resp = self._post(client, _gate_role_psop())
+        assert resp.status_code == 201
+        assert gated_save.saved == ["wf-explore"]
+
+    def test_draft_reference_rejected_without_persisting(self, client, gated_save, monkeypatch, tmp_path):
+        _use_catalog(monkeypatch, _gate_catalog(tmp_path, status="draft"))
+        resp = self._post(client, _gate_role_psop())
+        assert resp.status_code == 422
+        assert "INVALID_ROLE_SKILL" in resp.text
+        assert gated_save.saved == []
+
+    def test_missing_catalog_rejected(self, client, gated_save, monkeypatch):
+        _use_catalog(monkeypatch, None)
+        resp = self._post(client, _gate_role_psop())
+        assert resp.status_code == 422
+        assert gated_save.saved == []
+
+    def test_legacy_instance_workflow_needs_no_catalog(self, client, gated_save, monkeypatch):
+        _use_catalog(monkeypatch, None)
+        resp = self._post(client, _gate_instance_psop())
+        assert resp.status_code == 201
+        assert gated_save.saved == ["wf-legacy"]
