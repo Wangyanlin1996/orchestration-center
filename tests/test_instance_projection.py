@@ -26,6 +26,12 @@ from orchestrate.runtime.instance_projection import (
 from samples.role_pilot.technical_server import pilot_card
 
 
+@pytest.fixture(autouse=True)
+def server_authorization(monkeypatch):
+    monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_authorized_instances",
+                        lambda: ["inst-a", "inst-b", "inst-1"])
+
+
 def test_parse_scope_splits_three_parts():
     scope = parse_scope("operator-a/city-a/ran-domain-a")
     assert scope == ServiceScope(tenant="operator-a", site="city-a", business_object="ran-domain-a")
@@ -55,7 +61,7 @@ def test_build_context_prefers_request_over_config(monkeypatch):
     ))
     assert context.scope.tenant == "req-t"
     assert context.authorized_instance_ids == {"inst-1"}
-    assert context.caller_id == "tester"
+    assert context.caller_id == "orchestration-center"
 
 
 def test_build_context_falls_back_to_config(monkeypatch):
@@ -81,9 +87,10 @@ def test_build_policy_defaults():
 
 
 def _card(name, url, skill_ids):
-    return SimpleNamespace(
-        name=name, url=url, skills=[SimpleNamespace(id=sid, name=sid) for sid in skill_ids],
-    )
+    from google.protobuf.json_format import ParseDict
+    from a2a.types import AgentCard
+    return ParseDict(dict(name=name, supportedInterfaces=[dict(url=url, protocolBinding="HTTP+JSON")],
+                          skills=[dict(id=sid, name=sid) for sid in skill_ids]), AgentCard())
 
 
 def _registry():
@@ -258,3 +265,68 @@ def test_authorized_instances_split_and_trim(monkeypatch):
         lambda: {"role_authorized_instances": " a , b "},
     )
     assert configured_authorized_instances() == ["a", "b"]
+
+
+def test_request_cannot_expand_server_authorization():
+    with pytest.raises(ResolutionError, match="exceed server authorization"):
+        build_context_and_policy(ResolutionRequest(scope="t/s/b", authorized_instance_ids=["forbidden"]))
+
+
+def test_explicit_empty_authorization_does_not_fall_back():
+    context, _ = build_context_and_policy(ResolutionRequest(scope="t/s/b", authorized_instance_ids=[]))
+    assert context.authorized_instance_ids == set()
+
+
+def test_identity_comes_from_authenticated_middleware():
+    from orchestrate.runtime.instance_projection import bind_resolution_identity
+    from orchestrate.server.auth import SessionIdentity
+    request = SimpleNamespace(state=SimpleNamespace(user_identity=SessionIdentity("actual-user", "user")))
+    resolution = bind_resolution_identity(ResolutionRequest(scope="t/s/b", caller_id="claimed-admin"), request)
+    context, _ = build_context_and_policy(resolution)
+    assert context.caller_id == "actual-user"
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_freeze_repeated_instance_and_mixed_template(monkeypatch, tmp_path, mixed):
+    monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path", lambda: _approved_catalog_file(tmp_path))
+    monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path", lambda: _registry_file(tmp_path))
+    psop = _role_psop()
+    first = psop.steps[0].subtasks[0]
+    if mixed:
+        psop.steps[0].subtasks.append(_plain_psop().steps[0].subtasks[0].model_copy(update={"task_id": "legacy"}))
+    else:
+        first.binding_group = "shared"
+        psop.steps[0].subtasks.append(first.model_copy(update={"task_id": "t2"}, deep=True))
+    original = psop.model_dump(mode="json")
+    snapshot = resolve_execution_plan(psop, ResolutionRequest(scope="t/s/b"), [pilot_card("a", 1)])
+    assert len(snapshot.cards) == 1
+    assert len(snapshot.bindings) == (1 if mixed else 2)
+    assert psop.model_dump(mode="json") == original
+    assert snapshot.bindings[0].selection_reason == "highest_priority"
+    assert snapshot.bindings[0].candidates == ["inst-a"]
+    if mixed:
+        assert snapshot.execution_psop.steps[0].subtasks[1] == psop.steps[0].subtasks[1]
+
+
+def test_conflicting_duplicate_cards_rejected():
+    from orchestrate.runtime.instance_projection import _cards_by_identity
+    first, second = pilot_card("a", 1), pilot_card("a", 1)
+    second.skills[0].name = "Changed skill"
+    with pytest.raises(ResolutionError, match="Conflicting duplicate"):
+        _cards_by_identity([first, second])
+    assert len(_cards_by_identity([first, first])) == 1
+
+
+@pytest.mark.parametrize("change", ["protocol", "authentication", "extension"])
+def test_projection_rejects_unsupported_prerequisites(change):
+    from google.protobuf.json_format import MessageToDict, ParseDict
+    from a2a.types import AgentCard
+    card = MessageToDict(_card("agent-a", "http://a:1", ["exp-a"]))
+    if change == "protocol":
+        card["supportedInterfaces"][0]["protocolBinding"] = "GRPC"
+    elif change == "authentication":
+        card["securityRequirements"] = [{"schemes": {"bearer": {"list": []}}}]
+    else:
+        card["capabilities"] = {"extensions": [{"uri": "urn:required", "required": True}]}
+    observed = project_observations(_registry(), [ParseDict(card, AgentCard())])
+    assert observed and not observed[0].prerequisites_passed

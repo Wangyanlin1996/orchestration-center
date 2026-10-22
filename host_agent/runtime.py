@@ -174,7 +174,15 @@ class HostAgentExecutor(AgentExecutor):
         engine_client = None
         try:
             processed_intent = await self._process_intent(intent)
+            metadata = self._orchestration_metadata(context)
+            if "__orch_binding__" in metadata or "__orch_cards__" in metadata:
+                raise ValueError("ROLE_EXECUTION_NOT_ENABLED: Host snapshot verification is not available")
             workflow = await self._resolve_workflow(context, processed_intent)
+            steps = workflow.get("steps", []) if isinstance(workflow, dict) else getattr(workflow, "steps", [])
+            for step in steps:
+                tasks = step.get("subtasks", []) if isinstance(step, dict) else getattr(step, "subtasks", [])
+                if any((task.get("binding") if isinstance(task, dict) else getattr(task, "binding", None)) == "role" for task in tasks):
+                    raise ValueError("ROLE_EXECUTION_NOT_ENABLED: unresolved role workflow")
             agent_cards = await self._load_agent_cards()
             engine_client = self._engine_client_factory.create(agent_cards)
             control_point = self._control_point_factory(ControlPointContext(

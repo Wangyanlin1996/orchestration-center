@@ -80,6 +80,7 @@ async def test_execute_by_id_keeps_requested_snapshot_and_record(relay, endpoint
     original = relay.selected.model_dump(mode="json")
     if endpoint == "internal":
         response = await frontend_support_server.execute_workflow(
+            request=MagicMock(),
             psop_id=relay.selected.id, user_intent="shared purpose",
             target_agent="Host Agent", lang="en",
             scope=None, authorized_instances=None, caller_id=None,
@@ -130,8 +131,12 @@ async def test_intent_only_keeps_search_behavior_and_does_not_mutate_store(relay
             intent="shared purpose", agent_name="Host Agent", lang="en",
         )
     await collect(response)
-    relay.retrieval.retrieve_psop_by_intent_topn.assert_called_once_with("shared purpose", 3)
-    assert relay.sent[0][1].metadata["__orch_psop_id__"] == "search-result-B"
+    if endpoint == "auto":
+        relay.retrieval.retrieve_psop_by_intent_topn.assert_called_once_with("shared purpose", 3)
+        assert relay.sent[0][1].metadata["__orch_psop_id__"] == "search-result-B"
+    else:
+        relay.retrieval.retrieve_psop_by_intent_topn.assert_not_called()
+        assert not relay.sent[0][1].metadata
     assert relay.other.steps[0].subtasks[0].status == TaskStatus.PENDING
 
 
@@ -141,6 +146,7 @@ async def test_missing_requested_workflow_is_404_without_fallback(relay, endpoin
     with pytest.raises(HTTPException) as error:
         if endpoint == "internal":
             await frontend_support_server.execute_workflow(
+                request=MagicMock(),
                 psop_id="missing", user_intent="shared purpose", target_agent=None, lang="en",
             )
         else:
@@ -153,14 +159,15 @@ async def test_missing_requested_workflow_is_404_without_fallback(relay, endpoin
 
 
 @pytest.mark.asyncio
-async def test_intent_without_match_keeps_raw_dispatch(relay):
+async def test_intent_without_match_fails_without_dispatch(relay):
     relay.retrieval.retrieve_psop_by_intent_topn.return_value = []
     response = await sse_executor.dispatch_intent_sse(
         [SimpleNamespace(name="Host Agent")], "new intent",
     )
-    await collect(response)
-    assert relay.sent[0][1].parts[0].text == "new intent"
-    assert not relay.sent[0][1].metadata
+    events = await collect(response)
+    assert not relay.sent
+    assert events[-1]["data"]["code"] == "PSOP_NOT_FOUND"
+    assert relay.records[0].status.value == "failed"
 
 
 @pytest.mark.asyncio
@@ -209,7 +216,7 @@ async def test_intent_without_match_returns_real_host_failure(relay, monkeypatch
     assert "No matching workflow found" in events[-1]["data"]["error"]
     assert not any(event["type"] == "complete" for event in events)
     assert relay.records[0].status.value == "failed"
-    search.assert_awaited_once()
+    search.assert_not_awaited()
     executor._load_agent_cards.assert_not_awaited()
 
 

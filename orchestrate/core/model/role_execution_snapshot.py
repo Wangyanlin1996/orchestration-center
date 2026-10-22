@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""V1 role-only pilot envelope. Hashes provide integrity, not authentication."""
+"""Frozen role bindings, including mixed templates. Hashes are not authentication."""
 
 import hashlib
 import json
@@ -35,10 +35,18 @@ class FrozenBinding(CatalogModel):
     instance_id: Identifier
     instance_skill_id: Identifier
     execution_skill: Identifier
+    binding_group: str | None = None
+    agent: Identifier
+    endpoint: Identifier
+    selection_reason: Identifier
+    selected_priority: int
+    candidates: list[str]
+    candidate_priorities: dict[str, int]
+    exclusions: dict[str, list[str]]
 
 
 class RoleExecutionSnapshot(CatalogModel):
-    schema_version: Literal["role-pilot-v1"] = "role-pilot-v1"
+    schema_version: Literal["role-pilot-v2"] = "role-pilot-v2"
     execution_id: Identifier
     catalog_version: Identifier
     config_version: Identifier
@@ -59,9 +67,9 @@ class RoleExecutionSnapshot(CatalogModel):
             raise ValueError("Template fingerprint mismatch")
         if self.catalog_version != self.template.catalog_version:
             raise ValueError("Catalog version mismatch")
-        original = {t.task_id: t for s in self.template.steps for t in s.subtasks}
-        if not original or any(t.binding != "role" for t in original.values()):
-            raise ValueError("V1 pilot snapshots require role-only templates")
+        original = {t.task_id: t for s in self.template.steps for t in s.subtasks if t.binding == "role"}
+        if not original:
+            raise ValueError("Execution snapshots require role tasks")
         bindings = {b.task_id: b for b in self.bindings}
         cards = {c.instance_id: c for c in self.cards}
         if len(bindings) != len(self.bindings) or set(bindings) != set(original):
@@ -70,6 +78,9 @@ class RoleExecutionSnapshot(CatalogModel):
             raise ValueError("Cards must cover selected instances exactly once")
         if len({c.agent_name for c in self.cards}) != len(cards):
             raise ValueError("Duplicate selected agent name")
+        legacy_names = {t.agent for s in self.template.steps for t in s.subtasks if t.binding == "instance"}
+        if legacy_names & {c.agent_name for c in self.cards}:
+            raise ValueError("Selected agent name conflicts with legacy task")
         groups = {}
         for card in self.cards:
             if card.fingerprint != card_fingerprint(card.card):
@@ -84,6 +95,8 @@ class RoleExecutionSnapshot(CatalogModel):
         expected["catalog_version"] = None
         for step in expected["steps"]:
             for task in step["subtasks"]:
+                if task["binding"] != "role":
+                    continue
                 binding = bindings[task["task_id"]]
                 if (binding.role_id, binding.role_version, binding.role_skill_id) != (task["agent"], task["role_version"], task["skill"]):
                     raise ValueError("Original role reference mismatch")
@@ -94,6 +107,8 @@ class RoleExecutionSnapshot(CatalogModel):
                     if previous != binding.instance_id:
                         raise ValueError("Binding group instance mismatch")
                 card = cards[binding.instance_id]
+                if (binding.agent, binding.endpoint) != (card.agent_name, card.endpoint):
+                    raise ValueError("Binding card identity mismatch")
                 skills = card.card.get("skills", [])
                 matching = [s for s in skills if s.get("id") == binding.instance_skill_id]
                 if len(matching) != 1 or matching[0].get("name") != binding.execution_skill:
@@ -107,7 +122,7 @@ class RoleExecutionSnapshot(CatalogModel):
 def freeze_role_execution(template: PSOP, result, cards: list[AgentCardSnapshot], execution_id: str) -> RoleExecutionSnapshot:
     """Detach all input data and validate the entire envelope before returning."""
     fields = FrozenBinding.model_fields
-    payload = dict(schema_version="role-pilot-v1", execution_id=execution_id,
+    payload = dict(schema_version="role-pilot-v2", execution_id=execution_id,
         catalog_version=result.catalog_version, config_version=result.config_version,
         policy_version=result.policy_version, context=result.context.model_dump(mode="json"),
         template=template.model_dump(mode="json"),

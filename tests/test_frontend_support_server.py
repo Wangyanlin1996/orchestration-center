@@ -729,6 +729,7 @@ class TestExecuteRoleResolution:
         mock_retrieval.get_psop_by_id.return_value = _pilot_role_psop()
 
     def _dispatch(self, client, monkeypatch, tmp_path, *, registry=True, params=None):
+        monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_authorized_instances", lambda: ["inst-a", "inst-b"])
         monkeypatch.setattr(
             "orchestrate.core.catalog_gate.configured_catalog_path",
             lambda: _role_approved_catalog_file(tmp_path))
@@ -771,12 +772,12 @@ class TestExecuteRoleResolution:
         assert record.card_fingerprints
         assert record.execution_id == resolution["execution_id"]
 
-        # The dispatch itself carried the resolved evidence.
-        assert self.host_client.contents
-        metadata = self.host_client.contents[0].metadata
-        assert metadata["__orch_psop_id__"] == "wf-role-pilot"
-        assert json.loads(metadata["__orch_cards__"])["execution_id"] \
-            == resolution["execution_id"]
+        assert self.host_client.contents == []
+        assert events[-1]["data"]["code"] == "ROLE_EXECUTION_NOT_ENABLED"
+        assert record.status == ExecutionStatus.FAILED
+        assert record.resolution_snapshot["context"]["caller_id"] == "fixture-admin"
+        assert record.resolution_snapshot["bindings"][0]["selection_reason"]
+        assert record.template_fingerprint == resolution["template_fingerprint"]
 
     def test_without_registry_fails_closed(self, client, monkeypatch, tmp_path):
         response = self._dispatch(client, monkeypatch, tmp_path, registry=False, params={

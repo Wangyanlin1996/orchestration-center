@@ -51,3 +51,6 @@ class ExecutionRecord(BaseModel):
     execution_scope: Optional[str] = Field(None, description="Execution scope as tenant/site/business_object")
     bindings: Optional[List[Dict[str, Any]]] = Field(None, description="Frozen role-to-instance bindings")
     card_fingerprints: Optional[List[str]] = Field(None, description="Fingerprints of the frozen AgentCard snapshots")
+    resolution_snapshot: Optional[Dict[str, Any]] = Field(None, description="Immutable resolution envelope, independent of final task statuses and event retention")
+    template_fingerprint: Optional[str] = None
+    snapshot_fingerprint: Optional[str] = None

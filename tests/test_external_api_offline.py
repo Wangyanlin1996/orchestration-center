@@ -656,6 +656,7 @@ class TestExecutePsopByIdRoleResolution:
         self.records = handler.records
 
     def _get(self, client, monkeypatch, tmp_path, *, registry=True, params=None):
+        monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_authorized_instances", lambda: ["inst-a", "inst-b"])
         monkeypatch.setattr(
             "orchestrate.core.catalog_gate.configured_catalog_path",
             lambda: _role_approved_catalog_file(tmp_path))
@@ -684,7 +685,8 @@ class TestExecutePsopByIdRoleResolution:
         assert len(resolutions) == 1
         assert resolutions[0]["data"]["catalog_version"] == "pilot-wireless-v1"
         assert resolutions[0]["data"]["execution_scope"] == "t/s/b"
-        assert self.host_client.contents
+        assert self.host_client.contents == []
+        assert events[-1]["data"]["code"] == "ROLE_EXECUTION_NOT_ENABLED"
 
     def test_without_scope_fails_closed(self, client, monkeypatch, tmp_path):
         resp = self._get(client, monkeypatch, tmp_path, registry=False)
@@ -718,11 +720,11 @@ class TestExecuteAutoRoleResolution:
             )
             assert resp.status_code == 200
             mock_dispatch.assert_called_once()
-            assert mock_dispatch.call_args.kwargs["resolution_request"] == ResolutionRequest(
+            assert mock_dispatch.call_args.kwargs["resolution_request"].model_dump() == ResolutionRequest(
                 scope="t/s/b",
                 authorized_instance_ids=["inst-a", "inst-b"],
                 caller_id="api-client",
-            )
+            ).model_dump()
 
     def test_body_without_resolution_fields_defaults_to_empty_request(self, client):
         mock_sse = MagicMock()
@@ -737,7 +739,7 @@ class TestExecuteAutoRoleResolution:
             )
             assert resp.status_code == 200
             mock_dispatch.assert_called_once()
-            assert mock_dispatch.call_args.kwargs["resolution_request"] == ResolutionRequest()
+            assert mock_dispatch.call_args.kwargs["resolution_request"].model_dump() == ResolutionRequest().model_dump()
 
 
 class TestOrchestrateIntentCatalogGate:

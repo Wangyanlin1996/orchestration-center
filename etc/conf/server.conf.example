@@ -43,6 +43,13 @@ role_catalog_path=
 # role_registry_path=data/role_registry/pilot.json
 # role_execution_scope=operator-a/city-a/ran-domain-a
 # role_authorized_instances=ran-energy-technical-a,ran-energy-technical-b
+# role_authorized_instances is the server-owned authorization ceiling. Requests
+# may only narrow it; an explicit empty list authorizes no instances. This is a
+# deployment-wide pilot policy, not per-user instance/object access control.
+# caller_id inputs are ignored; audit identity comes from authenticated middleware.
+# Role resolution supports mixed templates, but role dispatch remains disabled
+# with ROLE_EXECUTION_NOT_ENABLED until Host snapshot verification is implemented.
+# Pilot cards must use one HTTP+JSON interface without auth or required extensions.
 agent_registry_url=http://127.0.0.1:5000
 # Outbound authentication material is separate from the server's TLS identity.
 agent_registry.token_env=REGISTRY_ACCESS_TOKEN

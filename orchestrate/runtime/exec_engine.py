@@ -64,7 +64,7 @@ def _resolution_error_event(error) -> dict:
     if not _CODE_PREFIX_PATTERN.match(code):
         code = "RESOLUTION_FAILED"
     data = {"error": message, "code": code}
-    for key in ("task_ids", "binding_group", "exclusions"):
+    for key in ("task_ids", "binding_group", "exclusions", "candidates"):
         value = getattr(error, key, None)
         if value:
             data[key] = value
@@ -83,6 +83,7 @@ def _resolution_event_data(snapshot) -> dict:
         "card_fingerprints": [c.fingerprint for c in snapshot.cards],
         "template_fingerprint": snapshot.template_fingerprint,
         "snapshot_fingerprint": snapshot.fingerprint,
+        "resolution_snapshot": snapshot.model_dump(mode="json"),
     }
 
 
@@ -107,11 +108,12 @@ def _role_dispatch_metadata(snapshot) -> dict:
 class OrchestrationEngine:
     """Thin orchestration channel -- PSOP preview + A2A-T dispatch + event forward."""
 
-    def __init__(self, agent_cards, target_agent: str = None, lang: str = None):
+    def __init__(self, agent_cards, target_agent: str = None, lang: str = None, *, select_template: bool = True):
         from common.util.config_util import get_conf
 
         self.lang = lang or "zh"
         self._agent_cards = agent_cards
+        self._select_template = select_template
         conf = get_conf()
         self._target_agent = target_agent or conf.get("workflow_host_agent_name", "Host Agent")
 
@@ -161,7 +163,7 @@ class OrchestrationEngine:
         """
         psop_model = psop.model_copy(deep=True) if psop is not None else None
         resolution_snapshot = None
-        if psop_model is None:
+        if psop_model is None and getattr(self, "_select_template", True):
             yield {
                 "type": "start",
                 "data": {"workflow": intent[:80], "intent": intent, "phase": "searching", "target_agent": self._target_agent},
@@ -180,9 +182,13 @@ class OrchestrationEngine:
                 loaded = await asyncio.to_thread(retrieval.get_psop_by_id, psop_id)
                 if loaded is not None:
                     psop_model = loaded.model_copy(deep=True)
+                else:
+                    yield _resolution_error_event(ResolutionError("PSOP_NOT_FOUND", "Selected workflow cannot be loaded"))
+                    return
             else:
-                logger.warning("[Orchestration] No matching PSOP found, dispatching raw intent")
-        else:
+                yield _resolution_error_event(ResolutionError("PSOP_NOT_FOUND", "No matching workflow found"))
+                return
+        elif psop_model is not None:
             yield {
                 "type": "start",
                 "data": {"workflow": psop_model.name, "workflow_id": psop_model.id, "phase": "loading"},
@@ -219,6 +225,12 @@ class OrchestrationEngine:
                 "data": {"psop": psop_model.model_dump(mode="json")},
                 "timestamp": time.time(),
             }
+
+            # Host does not yet validate this envelope or use its frozen cards.
+            yield _resolution_error_event(ResolutionError(
+                "ROLE_EXECUTION_NOT_ENABLED", "Host snapshot verification is not available",
+            ))
+            return
 
         # Until instance resolution is connected, never dispatch role IDs as
         # AgentCard names. This guard also covers templates selected by intent.

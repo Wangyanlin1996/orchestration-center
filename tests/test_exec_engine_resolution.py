@@ -24,6 +24,12 @@ SEED_CATALOG = Path("samples/role_pilot/role_catalog.json")
 OPTIMIZER = "ran-energy-optimizer"
 
 
+@pytest.fixture(autouse=True)
+def server_authorization(monkeypatch):
+    monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_authorized_instances",
+                        lambda: ["inst-a", "inst-b"])
+
+
 class _CapturingClient:
     def __init__(self):
         self.contents = []
@@ -114,7 +120,7 @@ async def _collect(engine, intent, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_events_resolves_role_psop_and_dispatches_execution_copy(monkeypatch, tmp_path):
+async def test_events_freezes_role_psop_but_blocks_dispatch_until_host_validation(monkeypatch, tmp_path):
     monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path",
                         lambda: _approved_catalog_file(tmp_path))
     monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path",
@@ -149,8 +155,12 @@ async def test_events_resolves_role_psop_and_dispatches_execution_copy(monkeypat
         index for index, event in enumerate(events) if event["type"] == "psop_update")
     assert resolution_index < last_psop_update_index
 
-    assert len(client.contents) == 1
-    metadata = client.contents[0].metadata
+    assert client.contents == []
+    assert events[-1]["data"]["code"] == "ROLE_EXECUTION_NOT_ENABLED"
+    from orchestrate.runtime.exec_engine import _role_dispatch_metadata
+    from orchestrate.core.model.role_execution_snapshot import RoleExecutionSnapshot
+    snapshot = RoleExecutionSnapshot.model_validate(data["resolution_snapshot"])
+    metadata = _role_dispatch_metadata(snapshot)
     binding = json.loads(metadata["__orch_binding__"])
     assert binding["config_version"] == "cfg-v1"
     assert binding["catalog_version"] == "pilot-wireless-v1"
@@ -158,14 +168,14 @@ async def test_events_resolves_role_psop_and_dispatches_execution_copy(monkeypat
     # Scope travels in the unified tenant/site/business_object string form.
     assert binding["scope"] == "t/s/b"
     assert binding["bindings"]
-    # The dispatched PSOP metadata is the execution copy, not the template.
-    execution_copy = json.loads(metadata["__orch_psop__"])
+    # Future dispatch metadata is derived from the frozen execution copy.
+    execution_copy = snapshot.execution_psop.model_dump(mode="json")
     assert execution_copy["steps"][0]["subtasks"][0]["binding"] == "instance"
     assert execution_copy == final_psop
     cards = json.loads(metadata["__orch_cards__"])
     assert cards["cards"]
     assert cards["execution_id"] == data["execution_id"]
-    assert metadata["__orch_psop_id__"] == psop.id
+    assert snapshot.template.id == psop.id
 
 
 @pytest.mark.asyncio
@@ -256,9 +266,25 @@ async def test_events_intent_search_resolves_role_template(monkeypatch, tmp_path
     assert all(task["binding"] == "instance"
                for step in psop_updates[-1]["data"]["psop"]["steps"]
                for task in step["subtasks"])
-    assert len(client.contents) == 1
-    metadata = client.contents[0].metadata
-    assert json.loads(metadata["__orch_psop__"])["steps"][0]["subtasks"][0]["binding"] == "instance"
-    assert json.loads(metadata["__orch_binding__"])["bindings"]
-    assert json.loads(metadata["__orch_cards__"])["execution_id"] \
-        == resolution_events[0]["data"]["execution_id"]
+    assert client.contents == []
+    assert events[-1]["data"]["code"] == "ROLE_EXECUTION_NOT_ENABLED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("results", [[], [SimpleNamespace(workflow_id="missing", name="Missing")]])
+async def test_auto_execution_never_falls_back_when_template_missing(monkeypatch, results):
+    client = _CapturingClient()
+    engine = _engine(monkeypatch, [], client)
+    monkeypatch.setattr(SharedHandlers, "retrieval", lambda: SimpleNamespace(
+        retrieve_psop_by_intent_topn=lambda *args: results,
+        get_psop_by_id=lambda _: None,
+    ))
+    events = await _collect(engine, "unknown")
+    assert events[-1]["data"]["code"] == "PSOP_NOT_FOUND"
+    assert client.contents == []
+
+
+def test_resolution_failure_preserves_candidates():
+    from orchestrate.runtime.role_resolver import ResolutionError
+    event = _resolution_error_event(ResolutionError("AMBIGUOUS_BINDING", "Ambiguous", candidates=["a", "b"]))
+    assert event["data"]["candidates"] == ["a", "b"]
