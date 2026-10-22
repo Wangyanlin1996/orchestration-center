@@ -38,8 +38,13 @@ from a2a.types import Part
 from loguru import logger
 from workflow_engine import A2ATransport, MessageContent, WorkflowEngineClient
 
+from orchestrate.core.catalog_gate import has_role_tasks
 from orchestrate.core.shared_handlers import SharedHandlers
 from orchestrate.core.model.psop import PSOP
+from orchestrate.persistence.errors import RoleReferenceError
+from orchestrate.runtime.instance_projection import (
+    ResolutionError, ResolutionRequest, resolve_execution_plan,
+)
 
 try:
     from a2a_t.llm.factory import LLMClientFactory as _LLMFactory
@@ -47,6 +52,32 @@ try:
     _LLMFactory.register("deepseek", _OpenAIClient)
 except Exception:
     pass
+
+
+def _resolution_error_event(error) -> dict:
+    message = str(error)
+    code = getattr(error, "code", None) or message.split(":", 1)[0]
+    data = {"error": message, "code": code}
+    for key in ("task_ids", "binding_group", "exclusions"):
+        value = getattr(error, key, None)
+        if value:
+            data[key] = value
+    return {"type": "error", "data": data, "timestamp": time.time()}
+
+
+def _resolution_event_data(snapshot) -> dict:
+    scope = snapshot.context.scope
+    return {
+        "execution_id": snapshot.execution_id,
+        "catalog_version": snapshot.catalog_version,
+        "config_version": snapshot.config_version,
+        "policy_version": snapshot.policy_version,
+        "execution_scope": f"{scope.tenant}/{scope.site}/{scope.business_object}",
+        "bindings": [b.model_dump(mode="json") for b in snapshot.bindings],
+        "card_fingerprints": [c.fingerprint for c in snapshot.cards],
+        "template_fingerprint": snapshot.template_fingerprint,
+        "snapshot_fingerprint": snapshot.fingerprint,
+    }
 
 
 class OrchestrationEngine:
@@ -92,9 +123,20 @@ class OrchestrationEngine:
         )
         return WorkflowEngineClient.owning(transport, max_negotiation_exchanges=3)
 
-    async def events(self, intent: str, *, psop: PSOP | None = None) -> AsyncIterator[dict]:
-        """Relay an explicit snapshot, or select by intent if none was supplied."""
+    async def events(
+        self, intent: str, *, psop: PSOP | None = None,
+        resolution_request: ResolutionRequest | None = None,
+    ) -> AsyncIterator[dict]:
+        """Relay an explicit snapshot, or select by intent if none was supplied.
+
+        Role-bound workflows are resolved against the approved catalog and
+        instance registry first: a ``resolution`` event carries the frozen
+        plan, and dispatch metadata binds the execution copy to its evidence.
+        Resolution failures yield one structured ``error`` event and never
+        reach transport.
+        """
         psop_model = psop.model_copy(deep=True) if psop is not None else None
+        resolution_snapshot = None
         if psop_model is None:
             yield {
                 "type": "start",
@@ -124,6 +166,30 @@ class OrchestrationEngine:
             }
 
         if psop_model is not None:
+            yield {
+                "type": "psop_update",
+                "data": {"psop": psop_model.model_dump(mode="json")},
+                "timestamp": time.time(),
+            }
+
+        if psop_model is not None and has_role_tasks(psop_model):
+            try:
+                resolution_snapshot = resolve_execution_plan(
+                    psop_model, resolution_request, self._agent_cards,
+                )
+            except (ResolutionError, RoleReferenceError, ValueError) as error:
+                logger.warning(
+                    "[Orchestration] Role resolution failed for workflow id={}: {}",
+                    psop_model.id, error,
+                )
+                yield _resolution_error_event(error)
+                return
+            psop_model = resolution_snapshot.execution_psop
+            yield {
+                "type": "resolution",
+                "data": _resolution_event_data(resolution_snapshot),
+                "timestamp": time.time(),
+            }
             yield {
                 "type": "psop_update",
                 "data": {"psop": psop_model.model_dump(mode="json")},
@@ -165,6 +231,19 @@ class OrchestrationEngine:
                 ensure_ascii=False,
             )
             logger.info(f"[Orchestration] Passing psop_id={psop_model.id} to target agent")
+
+        if resolution_snapshot is not None:
+            dispatch_metadata["__orch_binding__"] = json.dumps({
+                "catalog_version": resolution_snapshot.catalog_version,
+                "config_version": resolution_snapshot.config_version,
+                "policy_version": resolution_snapshot.policy_version,
+                "scope": resolution_snapshot.context.scope.model_dump(),
+                "bindings": [b.model_dump(mode="json") for b in resolution_snapshot.bindings],
+            }, ensure_ascii=False)
+            dispatch_metadata["__orch_cards__"] = json.dumps({
+                "execution_id": resolution_snapshot.execution_id,
+                "cards": [c.model_dump(mode="json") for c in resolution_snapshot.cards],
+            }, ensure_ascii=False)
 
         try:
             content = MessageContent(

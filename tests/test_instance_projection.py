@@ -14,11 +14,14 @@ import pytest
 from orchestrate.core.model.instance_binding import (
     InstanceBinding, InstanceRegistry, ServiceScope, SkillMapping,
 )
+from orchestrate.core.model.execution_record import ExecutionRecord, ExecutionStatus
 from orchestrate.core.model.psop import PSOP
 from orchestrate.persistence.errors import RoleReferenceError
 from orchestrate.runtime.instance_projection import (
-    ResolutionError, ResolutionRequest, build_context_and_policy, parse_scope,
-    project_observations, resolve_execution_plan,
+    ResolutionError, ResolutionRequest, build_context_and_policy,
+    configured_authorized_instances, configured_execution_scope,
+    configured_registry_path, parse_scope, project_observations,
+    resolve_execution_plan,
 )
 from samples.role_pilot.technical_server import pilot_card
 
@@ -220,3 +223,38 @@ def test_resolve_execution_plan_catalog_unavailable(monkeypatch, tmp_path):
     with pytest.raises(RoleReferenceError) as exc:
         resolve_execution_plan(_role_psop(), ResolutionRequest(scope="t/s/b"), [])
     assert "CATALOG_VERSION_UNAVAILABLE" in str(exc.value)
+
+
+def test_execution_record_accepts_resolution_trace_fields():
+    record = ExecutionRecord(
+        psop_id="p1", psop_name="n", status=ExecutionStatus.SUCCESS,
+        catalog_version="pilot-wireless-v1", config_version="cfg-v1",
+        policy_version="policy-v1", execution_scope="t/s/b",
+        bindings=[{"task_id": "t1"}], card_fingerprints=["abc123"],
+    )
+    assert record.catalog_version == "pilot-wireless-v1"
+    assert record.bindings == [{"task_id": "t1"}]
+    assert record.card_fingerprints == ["abc123"]
+
+
+def test_execution_record_trace_fields_default_none():
+    record = ExecutionRecord(psop_id="p1", psop_name="n", status=ExecutionStatus.SUCCESS)
+    assert record.catalog_version is None and record.bindings is None
+    assert record.execution_scope is None and record.card_fingerprints is None
+    assert record.config_version is None and record.policy_version is None
+
+
+def test_config_readers_ignore_whitespace_only_values(monkeypatch):
+    monkeypatch.setattr("common.util.config_util.get_conf", lambda: {
+        "role_execution_scope": "   ", "role_registry_path": "  ",
+    })
+    assert configured_execution_scope() is None
+    assert configured_registry_path() is None
+
+
+def test_authorized_instances_split_and_trim(monkeypatch):
+    monkeypatch.setattr(
+        "common.util.config_util.get_conf",
+        lambda: {"role_authorized_instances": " a , b "},
+    )
+    assert configured_authorized_instances() == ["a", "b"]

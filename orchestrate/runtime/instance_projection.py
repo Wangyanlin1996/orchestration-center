@@ -12,14 +12,17 @@ liveness/smoke checks belong to the Host validation stage.
 """
 
 from typing import Literal, Optional
+from uuid import uuid4
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from orchestrate.core.model.instance_binding import (
-    InstanceRegistry, ResolutionContext, ResolutionPolicy, ServiceScope,
-    load_instance_registry,
+    InstanceRegistry, ObservedInstance, ResolutionContext, ResolutionPolicy,
+    ServiceScope, load_instance_registry,
 )
+from orchestrate.core.model.psop import PSOP
+from orchestrate.core.model.role_execution_snapshot import RoleExecutionSnapshot
 from orchestrate.runtime.role_resolver import ResolutionError
 
 
@@ -111,13 +114,23 @@ def _card_endpoint(card) -> str:
     return ""
 
 
-def project_observations(registry: InstanceRegistry, agent_cards) -> list:
-    """Project live cards to ObservedInstance; unmatched instances stay invisible."""
-    from orchestrate.core.model.instance_binding import ObservedInstance
-
+def _cards_by_identity(agent_cards) -> dict:
+    """Index cards by (name, endpoint); on duplicates the last card wins."""
     cards_by_identity = {}
     for card in agent_cards or []:
-        cards_by_identity[(str(getattr(card, "name", "") or ""), _card_endpoint(card))] = card
+        identity = (str(getattr(card, "name", "") or ""), _card_endpoint(card))
+        if identity in cards_by_identity:
+            logger.warning(
+                "[RoleDispatch] Duplicate card identity {} overwrites an earlier card",
+                identity,
+            )
+        cards_by_identity[identity] = card
+    return cards_by_identity
+
+
+def project_observations(registry: InstanceRegistry, agent_cards) -> list[ObservedInstance]:
+    """Project live cards to ObservedInstance; unmatched instances stay invisible."""
+    cards_by_identity = _cards_by_identity(agent_cards)
     observations = []
     for instance in registry.instances:
         card = cards_by_identity.get((instance.agent_name, instance.endpoint))
@@ -148,10 +161,19 @@ def _card_payload(card) -> dict:
     return MessageToDict(card)
 
 
-def resolve_execution_plan(psop, request, agent_cards):
-    """Resolve role tasks and freeze the execution envelope for dispatch."""
-    from uuid import uuid4
+def resolve_execution_plan(
+    psop: PSOP, request: ResolutionRequest | None, agent_cards,
+) -> RoleExecutionSnapshot:
+    """Resolve role tasks and freeze the execution envelope for dispatch.
 
+    Raises:
+        ResolutionError: invalid inputs, unconfigured/unloadable registry, or
+            selection failures (e.g. RESOLUTION_INPUT_INVALID,
+            INSTANCE_SNAPSHOT_MISMATCH).
+        RoleReferenceError: the approved catalog release is unavailable
+            (CATALOG_VERSION_UNAVAILABLE).
+        ValueError: the frozen envelope fails snapshot validation.
+    """
     from orchestrate.core.catalog_gate import (
         configured_catalog_path, has_role_tasks, load_approved_catalog,
     )
@@ -193,10 +215,7 @@ def resolve_execution_plan(psop, request, agent_cards):
         psop, catalog, registry, project_observations(registry, agent_cards),
         context, policy,
     )
-    cards_by_identity = {
-        (str(getattr(card, "name", "") or ""), _card_endpoint(card)): card
-        for card in agent_cards or []
-    }
+    cards_by_identity = _cards_by_identity(agent_cards)
     frozen_cards = []
     for binding in result.bindings:
         card = cards_by_identity.get((binding["agent"], binding["endpoint"]))
