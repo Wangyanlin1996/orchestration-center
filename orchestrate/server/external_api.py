@@ -365,6 +365,9 @@ async def execute_psop_by_id(
     """
     Execute a known PSOP workflow by ID.
 
+    Role-bound workflows resolve at dispatch; pass scope/authorized_instances/
+    caller_id to authorize instance selection.
+
     Returns an SSE stream with execution progress and results.
     """
     try:

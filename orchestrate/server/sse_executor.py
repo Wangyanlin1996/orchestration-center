@@ -255,13 +255,19 @@ def _build_sse_response(
                 )
                 if record_resolution:
                     record_kwargs.update(
-                        execution_id=record_resolution.get("execution_id"),
-                        catalog_version=record_resolution.get("catalog_version"),
-                        config_version=record_resolution.get("config_version"),
-                        policy_version=record_resolution.get("policy_version"),
-                        execution_scope=record_resolution.get("execution_scope"),
-                        bindings=record_resolution.get("bindings"),
-                        card_fingerprints=record_resolution.get("card_fingerprints"),
+                        **{
+                            key: value
+                            for key, value in {
+                                "execution_id": record_resolution.get("execution_id"),
+                                "catalog_version": record_resolution.get("catalog_version"),
+                                "config_version": record_resolution.get("config_version"),
+                                "policy_version": record_resolution.get("policy_version"),
+                                "execution_scope": record_resolution.get("execution_scope"),
+                                "bindings": record_resolution.get("bindings"),
+                                "card_fingerprints": record_resolution.get("card_fingerprints"),
+                            }.items()
+                            if value is not None
+                        }
                     )
                 record = ExecutionRecord(**record_kwargs)
                 handler = get_storage_handler(InterfaceType.SAVE_EXECUTION_RECORD)
