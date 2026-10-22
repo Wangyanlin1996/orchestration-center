@@ -130,6 +130,18 @@ class OrchestrationEngine:
                 "timestamp": time.time(),
             }
 
+        # Until instance resolution is connected, never dispatch role IDs as
+        # AgentCard names. This guard also covers templates selected by intent.
+        if psop_model and any(
+            task.binding == "role" for step in psop_model.steps for task in step.subtasks
+        ):
+            logger.warning(
+                "[Orchestration] Refusing to dispatch unresolved role workflow "
+                "id={} name={!r}: role instance resolution is not enabled yet",
+                psop_model.id, psop_model.name,
+            )
+            raise ValueError("ROLE_EXECUTION_NOT_ENABLED: unresolved role workflow")
+
         engine_client = self._get_engine_client()
 
         yield {

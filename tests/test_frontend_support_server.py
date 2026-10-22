@@ -22,8 +22,14 @@ from io import BytesIO
 import json
 from fastapi.testclient import TestClient
 
+from a2a.types import AgentCard
+
 import httpx
 
+from orchestrate.core.catalog_gate import CatalogGate
+from orchestrate.core.model.psop import PSOP
+from orchestrate.core.model.role_catalog import RoleCatalog
+from orchestrate.core.shared_handlers import SharedHandlers
 from orchestrate.server.frontend_support_server import app
 
 
@@ -494,3 +500,106 @@ class TestStartProcessStreamEndpoint:
         assert response.status_code == 200
 
 
+
+
+# ===========================================================================
+# Catalog gate on /generate-from-intent (sub-requirement 2)
+# ===========================================================================
+
+_GATE_SOURCE = dict(package="synthetic", pdf="synthetic.pdf", pdf_pages=[1])
+
+
+def _gate_catalog(tmp_path, status="approved"):
+    catalog = RoleCatalog.model_validate(dict(
+        catalog_version="pilot-v1",
+        roles=[dict(
+            role_id="optimizer", role_version="1", name="Optimizer",
+            description="Synthetic test role", source=_GATE_SOURCE, review_status=status,
+            skills=[dict(skill_id="explore", name="explore", description="explore",
+                         source=_GATE_SOURCE, review_status=status)],
+        )],
+    ))
+    path = tmp_path / "catalog.json"
+    path.write_text(catalog.model_dump_json(), encoding="utf-8")
+    return str(path)
+
+
+def _gate_role_psop():
+    return PSOP.model_validate(dict(
+        id="wf-explore", name="Role demo", catalog_version="pilot-v1",
+        steps=[dict(name="optimize", subtasks=[dict(
+            task_id="t1", description="Explore intent", binding="role",
+            agent="optimizer", skill="explore", role_version="1",
+        )])],
+    ))
+
+
+class _RecordingHandler:
+    def __init__(self):
+        self.saved = []
+
+    def handle(self, psop):
+        self.saved.append(psop.id)
+        return psop.id
+
+
+class _ExplodingHandler:
+    def handle(self, psop):
+        raise RuntimeError("storage down")
+
+
+class TestGenerateFromIntentCatalogGate:
+    def _post(self, client, monkeypatch, generated_psop, save_handler):
+        monkeypatch.setattr(SharedHandlers, "_save_handle", save_handler)
+        with patch("orchestrate.server.frontend_support_server.get_agent_cards",
+                   new_callable=AsyncMock) as mock_cards, \
+             patch("orchestrate.server.frontend_support_server.IntentPsopGenerator") as mock_gen_class:
+            mock_cards.return_value = [AgentCard()]
+            mock_gen = MagicMock()
+            mock_gen.generate_psop_from_intent.return_value = generated_psop
+            mock_gen_class.return_value = mock_gen
+            return client.post(
+                f"{BASE}/generate-from-intent", json={"user_intent": "optimize energy"})
+
+    def test_unauthorized_role_psop_is_422_not_success(self, client, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "orchestrate.core.catalog_gate.configured_catalog_path",
+            lambda: _gate_catalog(tmp_path, status="draft"))
+        recording = _RecordingHandler()
+        resp = self._post(client, monkeypatch, _gate_role_psop(),
+                          CatalogGate(recording))
+        assert resp.status_code == 422
+        assert "INVALID_ROLE_SKILL" in resp.text
+        assert recording.saved == []
+
+    def test_missing_catalog_rejects_role_psop(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "orchestrate.core.catalog_gate.configured_catalog_path", lambda: None)
+        recording = _RecordingHandler()
+        resp = self._post(client, monkeypatch, _gate_role_psop(),
+                          CatalogGate(recording))
+        assert resp.status_code == 422
+        assert "CATALOG_VERSION_UNAVAILABLE" in resp.text
+        assert recording.saved == []
+
+    def test_approved_role_psop_saves_and_returns_result(self, client, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "orchestrate.core.catalog_gate.configured_catalog_path",
+            lambda: _gate_catalog(tmp_path))
+        recording = _RecordingHandler()
+        resp = self._post(client, monkeypatch, _gate_role_psop(),
+                          CatalogGate(recording))
+        assert resp.status_code == 200
+        assert resp.json()["data"]["id"] == "wf-explore"
+        assert recording.saved == ["wf-explore"]
+
+    def test_generic_auto_save_failure_still_returns_result(self, client, monkeypatch, tmp_path):
+        """Plain storage failures keep the existing non-fatal behavior:
+        the gate passes (approved catalog) and the storage handler itself
+        fails with a generic error."""
+        monkeypatch.setattr(
+            "orchestrate.core.catalog_gate.configured_catalog_path",
+            lambda: _gate_catalog(tmp_path))
+        resp = self._post(client, monkeypatch, _gate_role_psop(), _ExplodingHandler())
+        assert resp.status_code == 200
+        assert resp.json()["data"]["id"] == "wf-explore"

@@ -33,6 +33,11 @@ public_scheme=
 forwarded_allow_ips=127.0.0.1
 
 persistence_mode=file
+
+# Role catalog release file (exact version, e.g. data/role_catalog/pilot-wireless-v1.json).
+# Workflows containing role-bound tasks can only be saved when this file authorizes
+# every reference; unset means role tasks are rejected as CATALOG_VERSION_UNAVAILABLE.
+role_catalog_path=
 agent_registry_url=http://127.0.0.1:5000
 # Outbound authentication material is separate from the server's TLS identity.
 agent_registry.token_env=REGISTRY_ACCESS_TOKEN
