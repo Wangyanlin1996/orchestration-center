@@ -29,6 +29,7 @@ agent card loading) lives in the Workbench Agent.
 import asyncio
 import json
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -54,9 +55,14 @@ except Exception:
     pass
 
 
+_CODE_PREFIX_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
 def _resolution_error_event(error) -> dict:
     message = str(error)
     code = getattr(error, "code", None) or message.split(":", 1)[0]
+    if not _CODE_PREFIX_PATTERN.match(code):
+        code = "RESOLUTION_FAILED"
     data = {"error": message, "code": code}
     for key in ("task_ids", "binding_group", "exclusions"):
         value = getattr(error, key, None)
@@ -77,6 +83,24 @@ def _resolution_event_data(snapshot) -> dict:
         "card_fingerprints": [c.fingerprint for c in snapshot.cards],
         "template_fingerprint": snapshot.template_fingerprint,
         "snapshot_fingerprint": snapshot.fingerprint,
+    }
+
+
+def _role_dispatch_metadata(snapshot) -> dict:
+    """A2A-T metadata keys that bind the dispatch to its frozen resolution evidence."""
+    scope = snapshot.context.scope
+    return {
+        "__orch_binding__": json.dumps({
+            "catalog_version": snapshot.catalog_version,
+            "config_version": snapshot.config_version,
+            "policy_version": snapshot.policy_version,
+            "scope": f"{scope.tenant}/{scope.site}/{scope.business_object}",
+            "bindings": [b.model_dump(mode="json") for b in snapshot.bindings],
+        }, ensure_ascii=False),
+        "__orch_cards__": json.dumps({
+            "execution_id": snapshot.execution_id,
+            "cards": [c.model_dump(mode="json") for c in snapshot.cards],
+        }, ensure_ascii=False),
     }
 
 
@@ -233,17 +257,7 @@ class OrchestrationEngine:
             logger.info(f"[Orchestration] Passing psop_id={psop_model.id} to target agent")
 
         if resolution_snapshot is not None:
-            dispatch_metadata["__orch_binding__"] = json.dumps({
-                "catalog_version": resolution_snapshot.catalog_version,
-                "config_version": resolution_snapshot.config_version,
-                "policy_version": resolution_snapshot.policy_version,
-                "scope": resolution_snapshot.context.scope.model_dump(),
-                "bindings": [b.model_dump(mode="json") for b in resolution_snapshot.bindings],
-            }, ensure_ascii=False)
-            dispatch_metadata["__orch_cards__"] = json.dumps({
-                "execution_id": resolution_snapshot.execution_id,
-                "cards": [c.model_dump(mode="json") for c in resolution_snapshot.cards],
-            }, ensure_ascii=False)
+            dispatch_metadata.update(_role_dispatch_metadata(resolution_snapshot))
 
         try:
             content = MessageContent(

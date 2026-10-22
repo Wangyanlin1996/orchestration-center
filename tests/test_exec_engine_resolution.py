@@ -7,6 +7,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,8 @@ from orchestrate.core.model.instance_binding import (
     InstanceBinding, InstanceRegistry, ServiceScope, SkillMapping,
 )
 from orchestrate.core.model.psop import PSOP
+from orchestrate.core.shared_handlers import SharedHandlers
+from orchestrate.runtime.exec_engine import _resolution_error_event
 from orchestrate.runtime.instance_projection import ResolutionRequest
 from samples.role_pilot.technical_server import pilot_card
 
@@ -140,11 +143,25 @@ async def test_events_resolves_role_psop_and_dispatches_execution_copy(monkeypat
                for step in final_psop["steps"] for task in step["subtasks"])
     assert final_psop["catalog_version"] is None
 
+    # Resolution evidence precedes the execution-copy projection.
+    resolution_index = events.index(resolution_events[0])
+    last_psop_update_index = max(
+        index for index, event in enumerate(events) if event["type"] == "psop_update")
+    assert resolution_index < last_psop_update_index
+
     assert len(client.contents) == 1
     metadata = client.contents[0].metadata
     binding = json.loads(metadata["__orch_binding__"])
     assert binding["config_version"] == "cfg-v1"
+    assert binding["catalog_version"] == "pilot-wireless-v1"
+    assert binding["policy_version"] == "policy-v1"
+    # Scope travels in the unified tenant/site/business_object string form.
+    assert binding["scope"] == "t/s/b"
     assert binding["bindings"]
+    # The dispatched PSOP metadata is the execution copy, not the template.
+    execution_copy = json.loads(metadata["__orch_psop__"])
+    assert execution_copy["steps"][0]["subtasks"][0]["binding"] == "instance"
+    assert execution_copy == final_psop
     cards = json.loads(metadata["__orch_cards__"])
     assert cards["cards"]
     assert cards["execution_id"] == data["execution_id"]
@@ -197,3 +214,51 @@ async def test_events_without_role_tasks_unchanged(monkeypatch):
     assert "__orch_binding__" not in metadata
     assert "__orch_cards__" not in metadata
     assert metadata["__orch_psop_id__"] == "wf-plain"
+
+
+def test_resolution_error_event_code_fallback():
+    """Plain ValueError text must not leak as the error code; only an
+    ALL_CAPS message prefix is trusted, anything else is RESOLUTION_FAILED."""
+    masked = _resolution_error_event(ValueError("frozen envelope broke: detail"))
+    assert masked["data"]["code"] == "RESOLUTION_FAILED"
+    assert "frozen envelope broke" in masked["data"]["error"]
+    prefix = _resolution_error_event(ValueError("ROLE_EXECUTION_NOT_ENABLED: unresolved"))
+    assert prefix["data"]["code"] == "ROLE_EXECUTION_NOT_ENABLED"
+    bare = _resolution_error_event(ValueError("something exploded"))
+    assert bare["data"]["code"] == "RESOLUTION_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_events_intent_search_resolves_role_template(monkeypatch, tmp_path):
+    """psop=None: the intent-retrieved role template is resolved inside
+    events() and the execution copy is dispatched."""
+    monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path",
+                        lambda: _approved_catalog_file(tmp_path))
+    monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path",
+                        lambda: _registry_file(tmp_path))
+    client = _CapturingClient()
+    engine = _engine(monkeypatch, [pilot_card("a", 1), pilot_card("b", 2)], client)
+    psop = _role_psop()
+    monkeypatch.setattr(SharedHandlers, "retrieval", lambda: SimpleNamespace(
+        retrieve_psop_by_intent_topn=lambda *args: [
+            SimpleNamespace(workflow_id=psop.id, name=psop.name)
+        ],
+        get_psop_by_id=lambda _: psop,
+    ))
+    request = ResolutionRequest(scope="t/s/b", authorized_instance_ids=["inst-a", "inst-b"])
+
+    events = await _collect(engine, "explore energy", psop=None, resolution_request=request)
+
+    resolution_events = [e for e in events if e["type"] == "resolution"]
+    assert len(resolution_events) == 1
+    assert resolution_events[0]["data"]["catalog_version"] == "pilot-wireless-v1"
+    psop_updates = [e for e in events if e["type"] == "psop_update"]
+    assert all(task["binding"] == "instance"
+               for step in psop_updates[-1]["data"]["psop"]["steps"]
+               for task in step["subtasks"])
+    assert len(client.contents) == 1
+    metadata = client.contents[0].metadata
+    assert json.loads(metadata["__orch_psop__"])["steps"][0]["subtasks"][0]["binding"] == "instance"
+    assert json.loads(metadata["__orch_binding__"])["bindings"]
+    assert json.loads(metadata["__orch_cards__"])["execution_id"] \
+        == resolution_events[0]["data"]["execution_id"]

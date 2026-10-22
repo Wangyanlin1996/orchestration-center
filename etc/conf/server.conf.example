@@ -38,6 +38,11 @@ persistence_mode=file
 # Workflows containing role-bound tasks can only be saved when this file authorizes
 # every reference; unset means role tasks are rejected as CATALOG_VERSION_UNAVAILABLE.
 role_catalog_path=
+# Dispatch-time role resolution (sub-requirement 4). Role workflows fail
+# closed with RESOLUTION_INPUT_INVALID when dispatched without these keys.
+# role_registry_path=data/role_registry/pilot.json
+# role_execution_scope=operator-a/city-a/ran-domain-a
+# role_authorized_instances=ran-energy-technical-a,ran-energy-technical-b
 agent_registry_url=http://127.0.0.1:5000
 # Outbound authentication material is separate from the server's TLS identity.
 agent_registry.token_env=REGISTRY_ACCESS_TOKEN

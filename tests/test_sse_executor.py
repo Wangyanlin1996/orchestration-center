@@ -36,7 +36,7 @@ class _StubEngine:
         self._events = events or []
         self._exc = exc
 
-    async def events(self, intent):
+    async def events(self, intent, *, psop=None, resolution_request=None):
         for evt in self._events:
             yield evt
         if self._exc:
@@ -134,7 +134,7 @@ async def test_disconnecting_backpressured_stream_closes_engine_and_records_stop
     produced = 0
 
     class EndlessEngine:
-        async def events(self, intent):
+        async def events(self, intent, *, psop=None, resolution_request=None):
             nonlocal produced
             try:
                 while True:

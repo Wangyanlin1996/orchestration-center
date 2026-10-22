@@ -128,9 +128,16 @@ def _cards_by_identity(agent_cards) -> dict:
     return cards_by_identity
 
 
-def project_observations(registry: InstanceRegistry, agent_cards) -> list[ObservedInstance]:
-    """Project live cards to ObservedInstance; unmatched instances stay invisible."""
-    cards_by_identity = _cards_by_identity(agent_cards)
+def project_observations(
+    registry: InstanceRegistry, agent_cards, cards_by_identity: dict | None = None,
+) -> list[ObservedInstance]:
+    """Project live cards to ObservedInstance; unmatched instances stay invisible.
+
+    ``cards_by_identity`` may be supplied by a caller that already indexed
+    the cards (e.g. ``resolve_execution_plan``) so duplicate-card identities
+    are reported exactly once per process run.
+    """
+    cards_by_identity = _cards_by_identity(agent_cards) if cards_by_identity is None else cards_by_identity
     observations = []
     for instance in registry.instances:
         card = cards_by_identity.get((instance.agent_name, instance.endpoint))
@@ -211,11 +218,12 @@ def resolve_execution_plan(
             "RESOLUTION_INPUT_INVALID", "instance registry cannot be loaded"
         ) from error
     context, policy = build_context_and_policy(request)
+    cards_by_identity = _cards_by_identity(agent_cards)
     result = resolve_role_bindings(
-        psop, catalog, registry, project_observations(registry, agent_cards),
+        psop, catalog, registry,
+        project_observations(registry, agent_cards, cards_by_identity),
         context, policy,
     )
-    cards_by_identity = _cards_by_identity(agent_cards)
     frozen_cards = []
     for binding in result.bindings:
         card = cards_by_identity.get((binding["agent"], binding["endpoint"]))

@@ -88,7 +88,7 @@ def test_handler_crud_uses_one_owned_connection_source(mode, transport, tmp_path
     monkeypatch.setattr(middleware, "limiter", MovingWindowRateLimiter(MemoryStorage()))
 
     class Engine:
-        async def events(self, intent):
+        async def events(self, intent, *, psop=None, resolution_request=None):
             yield {"type": "start", "data": {"psop_id": sample_psop_dict["id"]}}
             yield {"type": "complete", "data": {}}
 

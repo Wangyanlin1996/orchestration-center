@@ -82,10 +82,12 @@ async def test_execute_by_id_keeps_requested_snapshot_and_record(relay, endpoint
         response = await frontend_support_server.execute_workflow(
             psop_id=relay.selected.id, user_intent="shared purpose",
             target_agent="Host Agent", lang="en",
+            scope=None, authorized_instances=None, caller_id=None,
         )
     else:
         response = await external_api.execute_psop_by_id(
             MagicMock(), relay.selected.id, user_intent="shared purpose", lang="en",
+            scope=None, authorized_instances=None, caller_id=None,
         )
     events = await collect(response)
     assert len(relay.sent) == 1
