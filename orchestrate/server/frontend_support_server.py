@@ -810,10 +810,18 @@ async def generate_from_intent(
                 'result': OperationResult.SUCCESS,
                 'details': {"id": psop.id, "name": psop.name, "steps_count": len(psop.steps)},
             })
-        except RoleReferenceError:
+        except RoleReferenceError as role_error:
             # An unauthorized generated workflow is a failed request, not a
             # degraded success: the caller must never receive a role PSOP
             # that the catalog gate refused to persist.
+            logger.warning(f"Generated PSOP rejected by catalog gate: {role_error}")
+            audit_logger.audit({
+                'object_name': OperationObject.PSOP,
+                'operation_name': OperationName.SAVE_PSOP,
+                'level': LogLevel.MINOR,
+                'result': OperationResult.FAILURE,
+                'details': {"id": psop.id, "name": psop.name, "message": str(role_error)},
+            })
             raise
         except Exception as save_error:
             logger.warning(f"Auto-save failed (non-fatal): {save_error}")

@@ -129,6 +129,24 @@ def test_optional_io_requires_evidence(catalog_data):
         RoleCatalog.model_validate(catalog_data)
 
 
+def test_overlong_catalog_text_rejected(catalog_data):
+    catalog_data["roles"][0]["description"] = "x" * 1025
+    with pytest.raises(ValidationError):
+        RoleCatalog.model_validate(catalog_data)
+
+
+def test_catalog_source_page_bounds(catalog_data):
+    source = catalog_data["roles"][0]["source"]
+    source["pdf_pages"] = [100001]
+    with pytest.raises(ValidationError):
+        RoleCatalog.model_validate(catalog_data)
+    source["pdf_pages"] = list(range(1, 10002))
+    with pytest.raises(ValidationError):
+        RoleCatalog.model_validate(catalog_data)
+    source["pdf_pages"] = [1, 100000]
+    assert RoleCatalog.model_validate(catalog_data).roles[0].source.pdf_pages == [1, 100000]
+
+
 def test_role_version_not_silently_upgraded(role_workflow, catalog_data):
     catalog_data["roles"][0]["role_version"] = "2"
     with pytest.raises(ValueError, match="INVALID_ROLE_SKILL"):

@@ -10,7 +10,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+# Generous ceiling: covers names/descriptions/evidence digests while keeping
+# a corrupt or hostile catalog file from injecting unbounded strings.
+Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)]
 ReviewStatus = Literal["draft", "pending_review", "approved", "rejected"]
 
 
@@ -21,7 +23,7 @@ class CatalogModel(BaseModel):
 class RoleSource(CatalogModel):
     package: Identifier
     pdf: Identifier
-    pdf_pages: list[Annotated[int, Field(gt=0)]] = Field(min_length=1)
+    pdf_pages: list[Annotated[int, Field(gt=0, le=100000)]] = Field(min_length=1, max_length=10000)
 
 
 class RoleSkill(CatalogModel):

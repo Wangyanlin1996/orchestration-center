@@ -13,6 +13,8 @@ and a missing catalog must never fail open.
 
 from typing import Callable
 
+from loguru import logger
+
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.model.role_catalog import load_role_catalog
 from orchestrate.persistence.errors import RoleReferenceError
@@ -37,6 +39,11 @@ def ensure_role_references_authorized(psop: PSOP, catalog_path: str | None) -> N
     if not has_role_tasks(psop):
         return
     if not catalog_path:
+        logger.warning(
+            "[CatalogGate] Rejected role workflow id={} name={!r} "
+            "catalog_version={}: no role catalog configured",
+            psop.id, psop.name, psop.catalog_version,
+        )
         raise RoleReferenceError(
             "CATALOG_VERSION_UNAVAILABLE: no role catalog configured "
             "(server.conf key role_catalog_path)"
@@ -47,13 +54,23 @@ def ensure_role_references_authorized(psop: PSOP, catalog_path: str | None) -> N
         # Missing/unreadable file, corrupt JSON and invalid catalog structure
         # are all "the requested release is unavailable"; the original error
         # stays as the internal cause instead of leaking local paths or full
-        # validation payloads to callers.
+        # validation payloads to callers. Server-side logs still name the
+        # configured path so operators can fix the release file.
+        logger.warning(
+            "[CatalogGate] Rejected role workflow id={} catalog_version={}: "
+            "catalog release {!r} cannot be loaded ({!r})",
+            psop.id, psop.catalog_version, catalog_path, error,
+        )
         raise RoleReferenceError(
             "CATALOG_VERSION_UNAVAILABLE: requested catalog cannot be loaded"
         ) from error
     try:
         catalog.validate_workflow(psop)
     except ValueError as error:
+        logger.warning(
+            "[CatalogGate] Rejected role workflow id={} catalog_version={}: {}",
+            psop.id, psop.catalog_version, error,
+        )
         raise RoleReferenceError(str(error)) from error
 
 
