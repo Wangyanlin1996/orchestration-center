@@ -32,14 +32,18 @@ def pilot_card(city: str, port: int) -> AgentCard:
 
 
 class TechnicalExecutor(AgentExecutor):
-    def __init__(self, city: str):
+    def __init__(self, city: str, *, scope: dict[str, str] | None = None):
         self.city = city
+        self.scope = dict(scope) if scope is not None else {
+            "tenant": "technical-demo", "site": f"city-{city}", "business_object": f"ran-{city}",
+        }
+        if set(self.scope) != {"tenant", "site", "business_object"} or not all(self.scope.values()):
+            raise ValueError("Technical scope requires tenant, site, and business_object")
 
     async def execute(self, context, event_queue):
         try:
             request = json.loads(context.get_user_input())
-            expected = {"tenant": "technical-demo", "site": f"city-{self.city}",
-                        "business_object": f"ran-{self.city}", "skill_id": f"explore-{self.city}"}
+            expected = {**self.scope, "skill_id": f"explore-{self.city}"}
             if not isinstance(request, dict) or any(request.get(k) != v for k, v in expected.items()):
                 raise ValueError("Scope or skill does not match this test instance")
             result = {**expected, "instance_id": f"technical-{self.city}",

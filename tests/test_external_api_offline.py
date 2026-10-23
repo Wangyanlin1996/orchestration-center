@@ -536,6 +536,212 @@ class TestOrchestrateSopCatalogGate:
         assert gated_save.saved == ["wf-legacy"]
 
 
+# ===========================================================================
+# 10. Dispatch-time role resolution threading through the execute endpoints
+# ===========================================================================
+
+from pathlib import Path
+
+from orchestrate.core.model.execution_record import ExecutionStatus
+from orchestrate.core.model.instance_binding import (
+    InstanceBinding, InstanceRegistry, ServiceScope, SkillMapping,
+)
+from orchestrate.runtime.instance_projection import ResolutionRequest
+from samples.role_pilot.technical_server import pilot_card
+
+_ROLE_SEED_CATALOG = Path("samples/role_pilot/role_catalog.json")
+_ROLE_OPTIMIZER = "ran-energy-optimizer"
+
+
+def _role_approve_all(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "review_status":
+                value[key] = "approved"
+            else:
+                _role_approve_all(item)
+    elif isinstance(value, list):
+        for item in value:
+            _role_approve_all(item)
+
+
+def _role_approved_catalog_file(tmp_path):
+    data = json.loads(_ROLE_SEED_CATALOG.read_text(encoding="utf-8"))
+    _role_approve_all(data)
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return str(path)
+
+
+def _role_registry_file(tmp_path):
+    scope = ServiceScope(tenant="t", site="s", business_object="b")
+    registry = InstanceRegistry(config_version="cfg-v1", instances=[
+        InstanceBinding(
+            instance_id="inst-a", agent_name="Technical RAN A", endpoint="http://127.0.0.1:1",
+            enabled=True, technical_status="passed", scopes=[scope],
+            skills=[SkillMapping(role_id=_ROLE_OPTIMIZER, role_version="1.0.0",
+                                 skill_id="explore-energy-intent",
+                                 instance_skill_id="explore-a", execution_skill="Explore A")],
+        ),
+        InstanceBinding(
+            instance_id="inst-b", agent_name="Technical RAN B", endpoint="http://127.0.0.1:2",
+            enabled=True, technical_status="passed", scopes=[scope],
+            skills=[SkillMapping(role_id=_ROLE_OPTIMIZER, role_version="1.0.0",
+                                 skill_id="fulfill-energy-intent",
+                                 instance_skill_id="explore-b", execution_skill="Explore B")],
+        ),
+    ])
+    path = tmp_path / "registry.json"
+    path.write_text(registry.model_dump_json(), encoding="utf-8")
+    return str(path)
+
+
+def _pilot_role_psop():
+    return PSOP.model_validate(dict(
+        id="wf-role-pilot", name="Role pilot", catalog_version="pilot-wireless-v1",
+        steps=[dict(name="explore", subtasks=[dict(
+            task_id="t1", description="Explore energy intent", binding="role",
+            agent=_ROLE_OPTIMIZER, skill="explore-energy-intent", role_version="1.0.0",
+        )])],
+    ))
+
+
+def _pilot_cards():
+    return [pilot_card("a", 1), pilot_card("b", 2)]
+
+
+def _sse_events(response):
+    return [json.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ")]
+
+
+class _RecordingRecordHandler:
+    def __init__(self):
+        self.records = []
+
+    def handle(self, record):
+        self.records.append(record)
+        return record.execution_id
+
+
+class _CapturingHostClient:
+    """Stands in for the A2A-T transport so dispatch stays offline."""
+
+    def __init__(self):
+        self.contents = []
+
+    async def stream_message(self, agent_name, content):
+        self.contents.append(content)
+        yield {"task_state": "COMPLETED", "metadata": {}}
+
+    async def close(self):
+        pass
+
+
+class TestExecutePsopByIdRoleResolution:
+    @pytest.fixture(autouse=True)
+    def stub_transport(self, monkeypatch):
+        from orchestrate.runtime.exec_engine import OrchestrationEngine
+        host_client = _CapturingHostClient()
+        monkeypatch.setattr(OrchestrationEngine, "_get_engine_client",
+                            lambda self: host_client)
+        self.host_client = host_client
+
+    @pytest.fixture(autouse=True)
+    def capture_records(self, monkeypatch):
+        handler = _RecordingRecordHandler()
+        monkeypatch.setattr("orchestrate.handlers.dispatch.get_storage_handler",
+                            lambda interface_type: handler)
+        self.records = handler.records
+
+    def _get(self, client, monkeypatch, tmp_path, *, registry=True, params=None):
+        monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_authorized_instances", lambda: ["inst-a", "inst-b"])
+        monkeypatch.setattr(
+            "orchestrate.core.catalog_gate.configured_catalog_path",
+            lambda: _role_approved_catalog_file(tmp_path))
+        monkeypatch.setattr(
+            "orchestrate.runtime.instance_projection.configured_registry_path",
+            lambda: _role_registry_file(tmp_path) if registry else None)
+        with patch("orchestrate.server.external_api.SharedHandlers") as mock_shared, \
+             patch("orchestrate.server.external_api.get_agent_cards",
+                   new_callable=AsyncMock) as mock_cards:
+            mock_retrieval = MagicMock()
+            mock_retrieval.get_psop_by_id.return_value = _pilot_role_psop()
+            mock_shared.retrieval.return_value = mock_retrieval
+            mock_cards.return_value = _pilot_cards()
+            return client.get("/api/v1/orchestrate/execute/wf-role-pilot",
+                              params=params or {})
+
+    def test_scope_param_yields_resolution_event(self, client, monkeypatch, tmp_path):
+        resp = self._get(client, monkeypatch, tmp_path, params={
+            "scope": "t/s/b",
+            "authorized_instances": "inst-a,inst-b",
+            "caller_id": "api-client",
+        })
+        assert resp.status_code == 200
+        events = _sse_events(resp)
+        resolutions = [e for e in events if e["type"] == "resolution"]
+        assert len(resolutions) == 1
+        assert resolutions[0]["data"]["catalog_version"] == "pilot-wireless-v1"
+        assert resolutions[0]["data"]["execution_scope"] == "t/s/b"
+        assert self.host_client.contents == []
+        assert events[-1]["data"]["code"] == "ROLE_EXECUTION_NOT_ENABLED"
+
+    def test_without_scope_fails_closed(self, client, monkeypatch, tmp_path):
+        resp = self._get(client, monkeypatch, tmp_path, registry=False)
+        assert resp.status_code == 200
+        events = _sse_events(resp)
+        errors = [e for e in events if e["type"] == "error"]
+        assert len(errors) == 1
+        assert errors[0]["data"]["code"] == "RESOLUTION_INPUT_INVALID"
+        assert all(e["type"] != "resolution" for e in events)
+        assert len(self.records) == 1
+        assert self.records[0].status == ExecutionStatus.FAILED
+        assert self.host_client.contents == []
+
+
+class TestExecuteAutoRoleResolution:
+    """POST /orchestrate/execute forwards the resolution body fields."""
+
+    def test_body_fields_pass_through_as_resolution_request(self, client):
+        mock_sse = MagicMock()
+        mock_sse.media_type = "text/event-stream"
+        with patch("orchestrate.server.external_api.get_agent_cards", new_callable=AsyncMock) as mock_cards, \
+             patch("orchestrate.server.external_api.dispatch_intent_sse", new_callable=AsyncMock) as mock_dispatch:
+            mock_cards.return_value = [MagicMock()]
+            mock_dispatch.return_value = mock_sse
+            resp = client.post(
+                "/api/v1/orchestrate/execute",
+                json={"task": "optimize energy",
+                      "scope": "t/s/b",
+                      "authorized_instances": ["inst-a", "inst-b"],
+                      "caller_id": "api-client"},
+            )
+            assert resp.status_code == 200
+            mock_dispatch.assert_called_once()
+            assert mock_dispatch.call_args.kwargs["resolution_request"].model_dump() == ResolutionRequest(
+                scope="t/s/b",
+                authorized_instance_ids=["inst-a", "inst-b"],
+                caller_id="api-client",
+            ).model_dump()
+
+    def test_body_without_resolution_fields_defaults_to_empty_request(self, client):
+        mock_sse = MagicMock()
+        mock_sse.media_type = "text/event-stream"
+        with patch("orchestrate.server.external_api.get_agent_cards", new_callable=AsyncMock) as mock_cards, \
+             patch("orchestrate.server.external_api.dispatch_intent_sse", new_callable=AsyncMock) as mock_dispatch:
+            mock_cards.return_value = [MagicMock()]
+            mock_dispatch.return_value = mock_sse
+            resp = client.post(
+                "/api/v1/orchestrate/execute",
+                json={"task": "do something"},
+            )
+            assert resp.status_code == 200
+            mock_dispatch.assert_called_once()
+            assert mock_dispatch.call_args.kwargs["resolution_request"].model_dump() == ResolutionRequest().model_dump()
+
+
 class TestOrchestrateIntentCatalogGate:
     def _post(self, client, psop):
         with patch("orchestrate.server.external_api.get_agent_cards", new_callable=AsyncMock) as mock_cards, \

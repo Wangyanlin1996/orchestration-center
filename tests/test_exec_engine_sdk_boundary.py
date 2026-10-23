@@ -47,6 +47,7 @@ class _PublicWorkflowClient:
 async def test_orchestration_uses_public_workflow_stream_api(monkeypatch):
     client = _PublicWorkflowClient()
     engine = OrchestrationEngine.__new__(OrchestrationEngine)
+    engine._select_template = False
     engine.lang = "zh"
     engine._agent_cards = [SimpleNamespace(name="Host Agent")]
     engine._target_agent = "Host Agent"
@@ -77,6 +78,7 @@ async def test_orchestration_reports_terminal_cancellation_without_sdk_metadata(
             )
 
     engine = OrchestrationEngine.__new__(OrchestrationEngine)
+    engine._select_template = False
     engine.lang = "zh"
     engine._target_agent = "Host Agent"
     monkeypatch.setattr(SharedHandlers, "retrieval", lambda: _EmptyRetrieval())
@@ -99,6 +101,7 @@ async def test_orchestration_reports_terminal_success_without_sdk_metadata(monke
             )
 
     engine = OrchestrationEngine.__new__(OrchestrationEngine)
+    engine._select_template = False
     engine.lang = "zh"
     engine._target_agent = "Host Agent"
     monkeypatch.setattr(SharedHandlers, "retrieval", lambda: _EmptyRetrieval())

@@ -167,6 +167,7 @@ async def test_unresolved_roles_never_open_transport(
     psop = PSOP.model_validate(role_workflow)
     engine = OrchestrationEngine.__new__(OrchestrationEngine)
     engine._target_agent = "Host Agent"
+    engine._agent_cards = []
 
     def forbidden_client():
         pytest.fail("Unresolved role reached transport construction")
@@ -178,6 +179,10 @@ async def test_unresolved_roles_never_open_transport(
         ],
         get_psop_by_id=lambda _: psop,
     ))
-    with pytest.raises(ValueError, match="ROLE_EXECUTION_NOT_ENABLED"):
-        async for _ in engine.events("explore", psop=psop if explicit else None):
-            pass
+    monkeypatch.setattr(
+        "orchestrate.core.catalog_gate.configured_catalog_path", lambda: None,
+    )
+    events = [event async for event in engine.events("explore", psop=psop if explicit else None)]
+    errors = [event for event in events if event["type"] == "error"]
+    assert len(errors) == 1
+    assert errors[0]["data"]["code"] == "CATALOG_VERSION_UNAVAILABLE"

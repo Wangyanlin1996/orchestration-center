@@ -63,6 +63,7 @@ from common.util.password_hash import FILE_HASH_PREFIX, hash_password
 from orchestrate.core.model.preflow import PreFlow
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.persistence import WorkflowStorageError
+from orchestrate.runtime.instance_projection import ResolutionRequest, bind_resolution_identity
 from orchestrate.server.external_api import router as external_router
 from orchestrate.server.account_api import router as account_router
 from orchestrate.server.account_auth import AccountLogin, authenticate_account, verify_access_password
@@ -1173,10 +1174,14 @@ execute_semaphore = anyio.Semaphore(int(config.get(FLOW_CTL_PARALLEL_START_PROCE
 
 @router.get("/execute")
 async def execute_workflow(
+    request: Request,
     psop_id: str = Query(..., description="PSOP workflow ID to execute"),
     user_intent: str = Query(None, description="Runtime user intent for context injection"),
     target_agent: str = Query(None, description="Target host agent name to dispatch to"),
     lang: str = Query(None, description="Language for agent responses (zh/en)"),
+    scope: str = Query(None, description="Execution scope tenant/site/business_object for role resolution"),
+    authorized_instances: str = Query(None, description="Comma-separated instance IDs authorized for this execution"),
+    caller_id: str = Query(None, deprecated=True, description="Compatibility input, ignored; authenticated identity is recorded"),
     _: Any = Depends(RateLimiter(config, "start_process_stream"))
 ):
     if not psop_id:
@@ -1192,9 +1197,19 @@ async def execute_workflow(
         agent_cards = await get_agent_cards()
 
         intent = user_intent or psop.name or psop_id
+        resolution_request = ResolutionRequest(
+            scope=scope,
+            authorized_instance_ids=(
+                [s.strip() for s in authorized_instances.split(",") if s.strip()]
+                if authorized_instances is not None else None
+            ),
+            caller_id=caller_id,
+        )
+        bind_resolution_identity(resolution_request, request)
         return await dispatch_intent_sse(
             agent_cards, intent, target_agent=target_agent, lang=lang,
             semaphore=execute_semaphore, psop=psop,
+            resolution_request=resolution_request,
         )
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")
@@ -1237,6 +1252,7 @@ async def dispatch_to_agent(
         return await dispatch_intent_sse(
             agent_cards, intent, target_agent=agent_name, lang=lang,
             semaphore=dispatch_semaphore,
+            select_template=False,
         )
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")

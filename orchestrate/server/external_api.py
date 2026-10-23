@@ -52,6 +52,7 @@ from orchestrate.core.model.preflow import PreFlow
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.psop_generator import PsopGenerator
 from orchestrate.core.shared_handlers import SharedHandlers
+from orchestrate.runtime.instance_projection import ResolutionRequest, bind_resolution_identity
 from orchestrate.server.sse_executor import dispatch_intent_sse
 from orchestrate.server.response_utils import ok, created, get_agent_cards
 from orchestrate.server.middleware import RateLimiter
@@ -80,6 +81,9 @@ class IntentOrchestrateRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     task: str = Field(..., min_length=1, max_length=10000, description="Task description used to select an existing PSOP; this endpoint does not generate workflows. No match is reported through SSE error.")
     name: Optional[str] = Field(None, max_length=256, deprecated=True, description="Deprecated compatibility input; ignored. To name a new workflow, use /orchestrate/intent instead.")
+    scope: Optional[str] = Field(None, max_length=512, description="Execution scope tenant/site/business_object for role resolution")
+    authorized_instances: Optional[list[str]] = Field(None, description="Requested subset of server-authorized instance IDs; empty means none")
+    caller_id: Optional[str] = Field(None, max_length=256, deprecated=True, description="Compatibility input, ignored; authenticated identity is recorded")
 
 class SearchRequest(BaseModel):
     intent: str = Field(..., min_length=1, max_length=10000, description="Natural language intent to search for matching workflows")
@@ -317,13 +321,22 @@ async def execute_workflow(
 
     To create a workflow, use /orchestrate/intent first, then execute its ID.
     The deprecated name input is accepted for compatibility but has no effect.
+    The scope/authorized_instances/caller_id inputs feed dispatch-time role
+    resolution for role-bound workflows; ordinary workflows ignore them.
 
     Returns an SSE stream with execution progress and results.
     """
     try:
         agent_cards = await get_agent_cards()
+        resolution_request = ResolutionRequest(
+            scope=body.scope,
+            authorized_instance_ids=body.authorized_instances,
+            caller_id=body.caller_id,
+        )
+        bind_resolution_identity(resolution_request, request)
         return await dispatch_intent_sse(
             agent_cards, body.task, lang=lang, semaphore=execute_semaphore,
+            resolution_request=resolution_request,
         )
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")
@@ -345,10 +358,17 @@ async def execute_psop_by_id(
     psop_id: str,
     user_intent: str = Query(None, description="Runtime user intent for context injection"),
     lang: str = Query(None, description="Language for agent responses (zh/en)"),
+    scope: str = Query(None, description="Execution scope tenant/site/business_object for role resolution"),
+    authorized_instances: str = Query(None, description="Comma-separated instance IDs authorized for this execution"),
+    caller_id: str = Query(None, deprecated=True, description="Compatibility input, ignored; authenticated identity is recorded"),
     _: Any = Depends(RateLimiter(config, "ext_execute_by_id"))
 ):
     """
     Execute a known PSOP workflow by ID.
+
+    Role-bound workflows resolve at dispatch; pass scope/authorized_instances/
+    caller_id is ignored; authenticated identity is recorded. The instance list
+    may only narrow the server-authorized set.
 
     Returns an SSE stream with execution progress and results.
     """
@@ -358,9 +378,18 @@ async def execute_psop_by_id(
         if not psop:
             raise HTTPException(status_code=404, detail=f"PSOP {psop_id} not found")
         intent = user_intent or psop.name or psop_id
+        resolution_request = ResolutionRequest(
+            scope=scope,
+            authorized_instance_ids=(
+                [s.strip() for s in authorized_instances.split(",") if s.strip()]
+                if authorized_instances is not None else None
+            ),
+            caller_id=caller_id,
+        )
+        bind_resolution_identity(resolution_request, request)
         return await dispatch_intent_sse(
             await get_agent_cards(), intent, lang=lang, semaphore=execute_semaphore,
-            psop=psop,
+            psop=psop, resolution_request=resolution_request,
         )
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")
