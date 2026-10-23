@@ -113,22 +113,9 @@ def _build_sse_response(
     # Capture before the deferred response body starts; later edits must not
     # change the workflow the caller selected for this execution.
     selected_psop = psop.model_copy(deep=True) if psop is not None else None
-    if not agent_cards:
-        async def error_stream():
-            yield f"data: {json.dumps({'type': 'error', 'message': 'No agent cards available'}, ensure_ascii=False)}\n\n"
-        return StreamingResponse(
-            error_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
     engine = OrchestrationEngine(
         agent_cards, target_agent=target_agent, lang=lang, select_template=select_template,
-    )
+    ) if agent_cards else None
 
     async def stream():
         from orchestrate.core.model.execution_record import ExecutionRecord, ExecutionStatus
@@ -153,6 +140,14 @@ def _build_sse_response(
         done_sentinel = object()
 
         async def _drain_engine():
+            if engine is None:
+                # Even registry-empty failures use the normal terminal event
+                # and persistence path. Do not search or construct transport.
+                await event_queue.put({"type": "error", "message": "No agent cards available",
+                    "data": {"code": "NO_AGENT_CARDS", "error": "No agent cards available"},
+                    "timestamp": time.time()})
+                await event_queue.put(done_sentinel)
+                return
             event_stream = (
                 engine.events(intent, psop=selected_psop, resolution_request=resolution_request)
                 if selected_psop is not None

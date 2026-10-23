@@ -37,11 +37,14 @@ from pathlib import Path
 
 from a2a.types import Part
 from loguru import logger
+from pydantic import ValidationError
 from workflow_engine import A2ATransport, MessageContent, WorkflowEngineClient
 
+from host_agent.dispatch_auth import PROOF_KEY, DispatchValidationError, sign_dispatch
 from orchestrate.core.catalog_gate import has_role_tasks
-from orchestrate.core.shared_handlers import SharedHandlers
 from orchestrate.core.model.psop import PSOP
+from orchestrate.core.model.role_execution_snapshot import binding_metadata
+from orchestrate.core.shared_handlers import SharedHandlers
 from orchestrate.persistence.errors import RoleReferenceError
 from orchestrate.runtime.instance_projection import (
     ResolutionError, ResolutionRequest, resolve_execution_plan,
@@ -64,7 +67,7 @@ def _resolution_error_event(error) -> dict:
     if not _CODE_PREFIX_PATTERN.match(code):
         code = "RESOLUTION_FAILED"
     data = {"error": message, "code": code}
-    for key in ("task_ids", "binding_group", "exclusions", "candidates"):
+    for key in ("task_ids", "binding_group", "exclusions", "candidates", "reason", "instance_id", "role_ids"):
         value = getattr(error, key, None)
         if value:
             data[key] = value
@@ -89,19 +92,9 @@ def _resolution_event_data(snapshot) -> dict:
 
 def _role_dispatch_metadata(snapshot) -> dict:
     """A2A-T metadata keys that bind the dispatch to its frozen resolution evidence."""
-    scope = snapshot.context.scope
     return {
-        "__orch_binding__": json.dumps({
-            "catalog_version": snapshot.catalog_version,
-            "config_version": snapshot.config_version,
-            "policy_version": snapshot.policy_version,
-            "scope": f"{scope.tenant}/{scope.site}/{scope.business_object}",
-            "bindings": [b.model_dump(mode="json") for b in snapshot.bindings],
-        }, ensure_ascii=False),
-        "__orch_cards__": json.dumps({
-            "execution_id": snapshot.execution_id,
-            "cards": [c.model_dump(mode="json") for c in snapshot.cards],
-        }, ensure_ascii=False),
+        "__orch_binding__": json.dumps(binding_metadata(snapshot), ensure_ascii=False),
+        "__orch_cards__": snapshot.model_dump_json(),
     }
 
 
@@ -207,6 +200,11 @@ class OrchestrationEngine:
                 resolution_snapshot = resolve_execution_plan(
                     psop_model, resolution_request, self._agent_cards,
                 )
+            except ValidationError:
+                error = DispatchValidationError("Invalid frozen execution snapshot", reason="ENVELOPE_SCHEMA")
+                logger.warning("[RoleDispatch] rejected psop_id={} reason={}", psop_model.id, error.reason)
+                yield _resolution_error_event(error)
+                return
             except (ResolutionError, RoleReferenceError, ValueError) as error:
                 logger.warning(
                     "[Orchestration] Role resolution failed for workflow id={}: {}",
@@ -214,7 +212,14 @@ class OrchestrationEngine:
                 )
                 yield _resolution_error_event(error)
                 return
-            psop_model = resolution_snapshot.execution_psop
+            # Live status updates must not mutate the authenticated evidence.
+            psop_model = resolution_snapshot.execution_psop.model_copy(deep=True)
+            logger.info(
+                "[RoleDispatch] resolved execution_id={} psop_id={} catalog_version={} task_ids={} instance_ids={}",
+                resolution_snapshot.execution_id, psop_model.id, resolution_snapshot.catalog_version,
+                [binding.task_id for binding in resolution_snapshot.bindings],
+                [card.instance_id for card in resolution_snapshot.cards],
+            )
             yield {
                 "type": "resolution",
                 "data": _resolution_event_data(resolution_snapshot),
@@ -226,14 +231,7 @@ class OrchestrationEngine:
                 "timestamp": time.time(),
             }
 
-            # Host does not yet validate this envelope or use its frozen cards.
-            yield _resolution_error_event(ResolutionError(
-                "ROLE_EXECUTION_NOT_ENABLED", "Host snapshot verification is not available",
-            ))
-            return
-
-        # Until instance resolution is connected, never dispatch role IDs as
-        # AgentCard names. This guard also covers templates selected by intent.
+        # Defense in depth: unresolved role IDs must never reach transport.
         if psop_model and any(
             task.binding == "role" for step in psop_model.steps for task in step.subtasks
         ):
@@ -243,21 +241,6 @@ class OrchestrationEngine:
                 psop_model.id, psop_model.name,
             )
             raise ValueError("ROLE_EXECUTION_NOT_ENABLED: unresolved role workflow")
-
-        engine_client = self._get_engine_client()
-
-        yield {
-            "type": "start",
-            "data": {
-                "workflow": psop_model.name if psop_model else intent[:80],
-                "intent": intent,
-                "phase": "dispatching",
-                "target_agent": self._target_agent,
-            },
-            "timestamp": time.time(),
-        }
-
-        logger.info("[Orchestration] Dispatching to target agent {}", self._target_agent)
 
         dispatch_metadata = {}
         if psop_model:
@@ -270,8 +253,31 @@ class OrchestrationEngine:
 
         if resolution_snapshot is not None:
             dispatch_metadata.update(_role_dispatch_metadata(resolution_snapshot))
+            try:
+                dispatch_metadata[PROOF_KEY] = sign_dispatch(
+                    dispatch_metadata, os.environ.get("ORCH_ROLE_DISPATCH_KEY", ""),
+                    intent=intent,
+                )
+            except DispatchValidationError as error:
+                logger.warning("[RoleDispatch] rejected execution_id={} psop_id={} reason={}",
+                               resolution_snapshot.execution_id, psop_model.id, error.reason)
+                yield _resolution_error_event(error)
+                return
+
+        engine_client = self._get_engine_client()
 
         try:
+            yield {
+                "type": "start",
+                "data": {
+                    "workflow": psop_model.name if psop_model else intent[:80],
+                    "intent": intent,
+                    "phase": "dispatching",
+                    "target_agent": self._target_agent,
+                },
+                "timestamp": time.time(),
+            }
+            logger.info("[Orchestration] Dispatching to target agent {}", self._target_agent)
             content = MessageContent(
                 parts=(Part(text=intent),),
                 metadata=dispatch_metadata,

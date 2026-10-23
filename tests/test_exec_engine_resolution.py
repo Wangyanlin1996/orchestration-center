@@ -19,6 +19,7 @@ from orchestrate.core.shared_handlers import SharedHandlers
 from orchestrate.runtime.exec_engine import _resolution_error_event
 from orchestrate.runtime.instance_projection import ResolutionRequest
 from samples.role_pilot.technical_server import pilot_card
+from workflow_engine import A2AStreamEvent
 
 SEED_CATALOG = Path("samples/role_pilot/role_catalog.json")
 OPTIMIZER = "ran-energy-optimizer"
@@ -26,6 +27,7 @@ OPTIMIZER = "ran-energy-optimizer"
 
 @pytest.fixture(autouse=True)
 def server_authorization(monkeypatch):
+    monkeypatch.delenv("ORCH_ROLE_DISPATCH_KEY", raising=False)
     monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_authorized_instances",
                         lambda: ["inst-a", "inst-b"])
 
@@ -36,7 +38,7 @@ class _CapturingClient:
 
     async def stream_message(self, agent_name, content):
         self.contents.append(content)
-        yield {"task_state": "COMPLETED", "metadata": {}}
+        yield A2AStreamEvent(event_type="task", task_state="TASK_STATE_COMPLETED", metadata={})
 
     async def close(self):
         pass
@@ -120,7 +122,7 @@ async def _collect(engine, intent, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_events_freezes_role_psop_but_blocks_dispatch_until_host_validation(monkeypatch, tmp_path):
+async def test_events_freezes_role_psop_but_blocks_dispatch_without_trust_key(monkeypatch, tmp_path):
     monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path",
                         lambda: _approved_catalog_file(tmp_path))
     monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path",
@@ -288,3 +290,30 @@ def test_resolution_failure_preserves_candidates():
     from orchestrate.runtime.role_resolver import ResolutionError
     event = _resolution_error_event(ResolutionError("AMBIGUOUS_BINDING", "Ambiguous", candidates=["a", "b"]))
     assert event["data"]["candidates"] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("by_intent", [False, True])
+async def test_role_dispatch_with_trusted_envelope(monkeypatch, tmp_path, by_intent):
+    from host_agent.dispatch_auth import verify_dispatch
+    key = "synthetic-test-key-for-role-dispatch-only"
+    monkeypatch.setenv("ORCH_ROLE_DISPATCH_KEY", key)
+    monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path",
+                        lambda: _approved_catalog_file(tmp_path))
+    monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path",
+                        lambda: _registry_file(tmp_path))
+    template = _role_psop()
+    original = template.model_dump_json()
+    monkeypatch.setattr(SharedHandlers, "retrieval", lambda: SimpleNamespace(
+        retrieve_psop_by_intent_topn=lambda *args: [SimpleNamespace(workflow_id=template.id, name=template.name)],
+        get_psop_by_id=lambda _: template,
+    ))
+    client = _CapturingClient()
+    engine = _engine(monkeypatch, [pilot_card("a", 1), pilot_card("b", 2)], client)
+    events = await _collect(engine, "explore", psop=None if by_intent else template,
+                            resolution_request=ResolutionRequest(scope="t/s/b"))
+    assert not [event for event in events if event["type"] == "error"]
+    assert events[-1]["type"] == "complete"
+    assert len(client.contents) == 1
+    verify_dispatch(client.contents[0].metadata, key, intent="explore")
+    assert template.model_dump_json() == original

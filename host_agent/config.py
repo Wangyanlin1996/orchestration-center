@@ -17,7 +17,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import TYPE_CHECKING
+
+from host_agent.role_contract import ExecutionScope, RoleBinding
+
+if TYPE_CHECKING:
+    from workflow_engine import TaskRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +37,7 @@ class HostAgentConfig:
     registry_url: str
     ssl_verify: bool = False
     max_negotiation_exchanges: int = 3
+    role_dispatch_key: str = field(default_factory=lambda: os.environ.get("ORCH_ROLE_DISPATCH_KEY", ""), repr=False)
 
     def __post_init__(self) -> None:
         if not self.orchestration_url:
@@ -39,9 +49,51 @@ class HostAgentConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RoleTaskIdentity:
+    """Original PSOP position and the corresponding SDK callback identifiers."""
+
+    task_id: str
+    step_name: str
+    subtask_index: int
+    sdk_execution_id: str
+    sdk_task_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RoleExecutionContext:
+    """Validated center context; callback IDs belong to the SDK's namespace."""
+
+    execution_id: str
+    caller_id: str
+    scope: ExecutionScope
+    bindings: tuple[RoleBinding, ...]
+    _task_identities: Mapping[tuple[str, str], RoleTaskIdentity] = field(
+        default_factory=lambda: MappingProxyType({}), repr=False, compare=False,
+    )
+
+    def task_identity(self, request: TaskRequest) -> RoleTaskIdentity:
+        """Resolve a callback after the Host has registered its task event."""
+        identity = self._task_identities.get((request.execution_id, request.task_id))
+        if identity is None or identity.step_name != request.step_name:
+            raise LookupError("Callback has no verified PSOP task mapping")
+        return identity
+
+    def binding_for(self, request: TaskRequest) -> RoleBinding | None:
+        """Return the original role binding, or None for a mapped instance task.
+
+        Unknown callbacks raise LookupError; they never fall back to matching
+        an agent name or skill, which need not be unique within a workflow.
+        """
+        task_id = self.task_identity(request).task_id
+        return next((binding.model_copy(deep=True) for binding in self.bindings
+                     if binding.task_id == task_id), None)
+
+
+@dataclass(frozen=True, slots=True)
 class ControlPointContext:
     """Request-scoped values made available to a business policy factory."""
 
     orchestration_url: str
     ssl_verify: bool
     lang: str
+    role_execution: RoleExecutionContext | None = None

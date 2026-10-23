@@ -573,6 +573,7 @@ The workflow engine does not initialize the retired A2A-T negotiation state mach
 | [User Guide](docs/en/Orchestration%20Center%20User%20Guide.md) | Features, scenarios, quick start, FAQ |
 | [API Reference](docs/en/Orchestration%20Center%20API%20Reference.md) | Full REST API specification |
 | [Developer Guide](docs/en/Orchestration%20Center%20Development%20Guide.md) | Custom handlers, LLM module, extension |
+| [Role Binding Pilot](docs/en/Role%20Binding%20Pilot.md) | Role dispatch contract, Host validation, policy context and technical limits |
 | [GCP Deployment Guide](docs/en/Orchestration%20Center%20GCP%20Containerized%20Deployment%20Guide.md) | Historical GCP guide — current one-click entrypoint is unsupported |
 | [Frontend README](workflow-designer/README.md) | Workflow Designer setup and tech stack |
 | [LLM Config](etc/config/README_en.md) | LLM configuration reference |
