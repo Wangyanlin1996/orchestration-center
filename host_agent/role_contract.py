@@ -33,6 +33,53 @@ def content_digest(value: dict[str, Any]) -> str:
     return hashlib.sha256(wire.encode("utf-8")).hexdigest()
 
 
+def _requirement_scheme_names(requirement) -> set[str] | None:
+    """Scheme names a security requirement references; ``None`` when malformed."""
+    if not isinstance(requirement, dict):
+        return None
+    schemes = requirement.get("schemes")
+    if not isinstance(schemes, dict) or not schemes:
+        return None
+    return {str(name) for name in schemes}
+
+
+def auth_declaration_complete(card: dict[str, Any]) -> bool:
+    """Requirements non-empty implies structurally valid, declared references.
+
+    Structure is validated before references: a non-dict requirement or a
+    non-map ``schemes`` field is incomplete, never a vacuously empty reference
+    set. Executability (credentials or provider state) is a Host dispatch
+    concern; the shared contract only rejects incomplete declarations. The
+    center-side projection reuses this predicate.
+    """
+    schemes = card.get("securitySchemes")
+    requirements = card.get("securityRequirements")
+    if not requirements:
+        return True
+    if not isinstance(schemes, dict) or not schemes or not isinstance(requirements, list):
+        return False
+    declared = {str(name) for name in schemes}
+    for requirement in requirements:
+        names = _requirement_scheme_names(requirement)
+        if names is None or not names <= declared:
+            return False
+    return True
+
+
+def interface_url_admissible(url) -> bool:
+    """One interface URL is clean HTTP(S): host present, no embedded credentials.
+
+    Unparsable URLs (``urlparse`` raises ``ValueError``) are inadmissible
+    instead of aborting the caller's whole validation batch.
+    """
+    try:
+        parsed = urlparse(str(url or ""))
+    except ValueError:
+        return False
+    return (parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+            and parsed.username is None and parsed.password is None)
+
+
 class WireModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -155,19 +202,19 @@ class RoleSnapshot(WireModel):
             _require(card.fingerprint == content_digest(card.card), "CARD_DIGEST", "Card fingerprint mismatch")
             _require(card.agent_name == card.card.get("name"), "CARD_IDENTITY", "Card identity mismatch")
             interfaces = card.card.get("supportedInterfaces", [])
-            _require(isinstance(interfaces, list) and len(interfaces) == 1 and isinstance(interfaces[0], dict)
-                     and interfaces[0].get("url") == card.endpoint and interfaces[0].get("protocolBinding") == "HTTP+JSON",
-                     "CARD_INTERFACE", "Pilot requires one matching HTTP+JSON endpoint")
-            endpoint = urlparse(card.endpoint)
-            _require(endpoint.scheme in {"http", "https"} and bool(endpoint.hostname)
-                     and endpoint.username is None and endpoint.password is None,
-                     "CARD_INTERFACE", "Pilot endpoint must be HTTP(S) without embedded credentials")
+            _require(isinstance(interfaces, list) and bool(interfaces)
+                     and all(isinstance(interface, dict) for interface in interfaces),
+                     "CARD_INTERFACE", "Card must declare at least one interface")
+            _require(any(interface.get("protocolBinding") == "HTTP+JSON"
+                         and interface.get("url") == card.endpoint for interface in interfaces),
+                     "CARD_INTERFACE", "Card endpoint must match a declared HTTP+JSON interface")
+            for interface in interfaces:
+                _require(interface_url_admissible(interface.get("url")), "CARD_INTERFACE",
+                         "Interface URLs must be HTTP(S) without embedded credentials")
             capabilities = card.card.get("capabilities", {})
             _require(isinstance(capabilities, dict), "CARD_SCHEMA", "Invalid card capabilities")
-            extensions = capabilities.get("extensions", [])
-            _require(not card.card.get("securitySchemes") and not card.card.get("securityRequirements")
-                     and isinstance(extensions, list) and all(isinstance(ext, dict) and not ext.get("required") for ext in extensions),
-                     "UNSUPPORTED_PREREQUISITE", "Role pilot does not support authentication or required extensions")
+            _require(auth_declaration_complete(card.card), "AUTH_DECLARATION_INCOMPLETE",
+                     "Security requirements must reference schemes declared on the card")
         self._verify_execution_copy(steps, bindings, cards)
         return self
 

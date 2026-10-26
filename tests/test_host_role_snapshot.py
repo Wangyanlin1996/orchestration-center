@@ -230,6 +230,28 @@ async def test_host_logs_verified_identity_on_acceptance_and_registry_rejection(
 
 
 @pytest.mark.asyncio
+async def test_expanded_candidate_envelope_reaches_engine_factory():
+    from test_role_contract_candidates import _candidate, _complete_auth_and_required_extension, _add_extra_interfaces
+
+    def mutate(card):
+        _add_extra_interfaces(card)
+        _complete_auth_and_required_extension(card)
+
+    snapshot, live = _candidate(mutate)
+    metadata = {
+        "__orch_psop_id__": snapshot.template.id,
+        "__orch_psop__": snapshot.execution_psop.model_dump_json(),
+        **_role_dispatch_metadata(snapshot),
+    }
+    metadata[PROOF_KEY] = sign_dispatch(metadata, KEY, intent=INTENT)
+    host, queue = executor([live]), Queue()
+    host._engine_client_factory.create.return_value = StubWorkflowEngineClient()
+    await host.execute(context(metadata), queue)
+    host._engine_client_factory.create.assert_called_once()
+    assert queue.events[-1].status.state == TaskState.TASK_STATE_COMPLETED
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["missing", "endpoint", "skill", "security", "extension", "duplicate"])
 async def test_registry_drift_rejected_before_transport(change):
     snapshot, metadata = envelope()

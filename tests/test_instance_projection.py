@@ -93,6 +93,41 @@ def _card(name, url, skill_ids):
                           skills=[dict(id=sid, name=sid) for sid in skill_ids]), AgentCard())
 
 
+def _multi_interface_card(name, interfaces, skill_ids, url=None):
+    from google.protobuf.json_format import ParseDict
+    from a2a.types import AgentCard
+    payload = dict(name=name, supportedInterfaces=interfaces,
+                   skills=[dict(id=sid, name=sid) for sid in skill_ids])
+    if url is not None:
+        payload["url"] = url
+    return ParseDict(payload, AgentCard())
+
+
+def _auth_card(name, url, skill_ids, schemes=None, requirements=None, required_extension=None):
+    from google.protobuf.json_format import MessageToDict, ParseDict
+    from a2a.types import AgentCard
+    payload = MessageToDict(_card(name, url, skill_ids))
+    if schemes is not None:
+        payload["securitySchemes"] = schemes
+    if requirements is not None:
+        payload["securityRequirements"] = requirements
+    if required_extension is not None:
+        payload["capabilities"] = {"extensions": [dict(uri=required_extension, required=True)]}
+    return ParseDict(payload, AgentCard())
+
+
+def _registry_with_endpoint(endpoint):
+    return InstanceRegistry(config_version="cfg-v1", instances=[
+        InstanceBinding(
+            instance_id="inst-a", agent_name="agent-a", endpoint=endpoint,
+            enabled=True, technical_status="passed",
+            scopes=[ServiceScope(tenant="t", site="s", business_object="b")],
+            skills=[SkillMapping(role_id="r", role_version="v1", skill_id="sk",
+                                 instance_skill_id="exp-a", execution_skill="exp-a")],
+        ),
+    ])
+
+
 def _registry():
     return InstanceRegistry(config_version="cfg-v1", instances=[
         InstanceBinding(
@@ -122,6 +157,86 @@ def test_projection_matches_by_name_and_endpoint():
 
 def test_projection_skips_missing_cards():
     assert project_observations(_registry(), []) == []
+
+
+def _iface(url, binding="HTTP+JSON"):
+    return dict(url=url, protocolBinding=binding)
+
+
+def test_projection_accepts_multi_interface_card_with_pinned_endpoint():
+    card = _multi_interface_card("agent-a", [
+        _iface("http://a:0"), _iface("http://a:1"), _iface("http://a:2", "GRPC")], ["exp-a"])
+    observed = project_observations(_registry(), [card])
+    assert [o.instance_id for o in observed] == ["inst-a"]
+    assert observed[0].prerequisites_passed is True
+
+
+def test_projection_malformed_interface_url_excludes_only_that_candidate():
+    broken = _multi_interface_card("agent-a", [_iface("http://a:1"), _iface("http://[broken", "GRPC")], ["exp-a"])
+    healthy = _card("agent-b", "http://b:2", ["exp-b"])
+    observed = project_observations(_registry(), [broken, healthy])
+    assert {o.instance_id: o.prerequisites_passed for o in observed} == {"inst-a": False, "inst-b": True}
+
+
+@pytest.mark.parametrize("variant", ["additional_grpc", "additional_http", "pinned"])
+def test_projection_rejects_embedded_interface_credentials(variant):
+    if variant == "additional_grpc":
+        endpoint, interfaces = "http://a:1", [_iface("http://a:1"), _iface("http://u:p@a:2", "GRPC")]
+    elif variant == "additional_http":
+        endpoint, interfaces = "http://a:1", [_iface("http://a:1"), _iface("http://u:p@a:2")]
+    else:
+        endpoint, interfaces = "http://u:p@a:1", [_iface("http://u:p@a:1")]
+    card = _multi_interface_card("agent-a", interfaces, ["exp-a"])
+    observed = project_observations(_registry_with_endpoint(endpoint), [card])
+    assert observed and not observed[0].prerequisites_passed
+
+
+@pytest.mark.parametrize("mutation", ["missing_schemes", "undeclared_reference"])
+def test_projection_rejects_incomplete_auth_declaration(mutation):
+    if mutation == "missing_schemes":
+        card = _auth_card("agent-a", "http://a:1", ["exp-a"],
+                          requirements=[{"schemes": {"bearer": {"list": []}}}])
+    else:
+        card = _auth_card("agent-a", "http://a:1", ["exp-a"],
+                          schemes={"real": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
+                          requirements=[{"schemes": {"ghost": {"list": []}}}])
+    observed = project_observations(_registry(), [card])
+    assert observed and not observed[0].prerequisites_passed
+
+
+def test_projection_accepts_complete_auth_and_required_extensions():
+    card = _auth_card("agent-a", "http://a:1", ["exp-a"],
+                      schemes={"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
+                      requirements=[{"schemes": {"bearer": {"list": []}}}],
+                      required_extension="urn:example")
+    observed = project_observations(_registry(), [card])
+    assert observed and observed[0].prerequisites_passed is True
+
+
+@pytest.mark.parametrize("variant", ["single_grpc", "matches_grpc_only"])
+def test_projection_rejects_endpoint_without_http_json_match(variant):
+    if variant == "single_grpc":
+        card = _multi_interface_card("agent-a", [_iface("http://a:1", "GRPC")], ["exp-a"])
+    else:
+        card = _multi_interface_card("agent-a", [_iface("http://a:2"), _iface("http://a:1", "GRPC")], ["exp-a"])
+    observed = project_observations(_registry(), [card])
+    assert observed and not observed[0].prerequisites_passed
+
+
+def test_multi_interface_card_registers_all_declared_endpoints():
+    from orchestrate.runtime.instance_projection import _cards_by_identity
+    card = _multi_interface_card("agent-a", [_iface("http://a:1"), _iface("http://a:2", "GRPC")], ["exp-a"])
+    identities = _cards_by_identity([card])
+    assert set(identities) == {("agent-a", "http://a:1"), ("agent-a", "http://a:2")}
+
+
+def test_conflicting_identity_across_overlapping_endpoints_rejected():
+    from orchestrate.runtime.instance_projection import _cards_by_identity
+    first = _multi_interface_card("agent-a", [_iface("http://a:1"), _iface("http://a:2")], ["exp-a"])
+    second = _multi_interface_card("agent-a", [_iface("http://a:2")], ["exp-b"])
+    with pytest.raises(ResolutionError, match="Conflicting duplicate"):
+        _cards_by_identity([first, second])
+    assert len(_cards_by_identity([first, first])) == 2
 
 
 SEED_CATALOG = Path("samples/role_pilot/role_catalog.json")
@@ -315,18 +430,3 @@ def test_conflicting_duplicate_cards_rejected():
     with pytest.raises(ResolutionError, match="Conflicting duplicate"):
         _cards_by_identity([first, second])
     assert len(_cards_by_identity([first, first])) == 1
-
-
-@pytest.mark.parametrize("change", ["protocol", "authentication", "extension"])
-def test_projection_rejects_unsupported_prerequisites(change):
-    from google.protobuf.json_format import MessageToDict, ParseDict
-    from a2a.types import AgentCard
-    card = MessageToDict(_card("agent-a", "http://a:1", ["exp-a"]))
-    if change == "protocol":
-        card["supportedInterfaces"][0]["protocolBinding"] = "GRPC"
-    elif change == "authentication":
-        card["securityRequirements"] = [{"schemes": {"bearer": {"list": []}}}]
-    else:
-        card["capabilities"] = {"extensions": [{"uri": "urn:required", "required": True}]}
-    observed = project_observations(_registry(), [ParseDict(card, AgentCard())])
-    assert observed and not observed[0].prerequisites_passed
