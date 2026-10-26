@@ -50,7 +50,7 @@ SPDX-License-Identifier: Apache-2.0
   | Parameter | Type    | Description                                        |
   |-----------|---------|----------------------------------------------------|
   | code      | integer | HTTP status code (e.g. 400, 404, 422, 500)         |
-  | message   | string  | Error description                                  |
+  | message   | string or object | Error description; role generation uses `{code, message}` |
   | status    | string  | `"error"`                                          |
   | data      | object  | `null`                                             |
 
@@ -160,6 +160,8 @@ integrations are described in [transport configuration](../transport-runtime.md)
     |-----------|----------|--------|--------------------|---------|--------------------------------|
     | file      | No       | file   | PDF/TXT/MD file    | -       | Solution package file to parse |
     | name      | No       | string | -                  | -       | Optional workflow name         |
+    | binding | No | string | `instance` or `role` | `instance` | Generation mode |
+    | catalog_version | No | string | Exact release | - | Only valid with `binding=role` |
 
     **Mode B: JSON Request Body (application/json)**
 
@@ -167,6 +169,8 @@ integrations are described in [transport configuration](../transport-runtime.md)
     |-------------|----------|--------|-------|---------|------------------------------------------------|
     | sop_content | Yes      | string | -     | -       | Natural language SOP steps (Markdown)           |
     | name        | No       | string | -     | -       | Optional workflow name                         |
+    | binding | No | string | `instance` or `role` | `instance` | Generation mode |
+    | catalog_version | No | string | Exact release | - | Only valid with `binding=role` |
 
     > **Priority**: If both a file and a JSON request body are provided, the file takes priority.
 
@@ -279,6 +283,8 @@ integrations are described in [transport configuration](../transport-runtime.md)
     |-----------|----------|--------|-------|---------|--------------------------------|
     | intent    | Yes      | string | -     | -       | Natural language task intent   |
     | name      | No       | string | -     | -       | Optional workflow name         |
+    | binding | No | string | `instance` or `role` | `instance` | Generation mode |
+    | catalog_version | No | string | Exact release | - | Only valid with `binding=role` |
 
 - Request Example
 
@@ -330,6 +336,41 @@ integrations are described in [transport configuration](../transport-runtime.md)
     | 503         | Concurrency limit reached, server busy                       |
 
 ---
+
+### Role generation contract for sections 1 and 2
+
+`binding=role` uses approved role/skill definitions and does not require any
+registered instances. `catalog_version` selects an exact configured release;
+omitting it selects the currently configured file for this new request only.
+No directory or instance fallback is performed. Explicit model conflicts,
+missing/duplicated actions and changed task identities fail validation.
+Generation and save validation share a fixed request snapshot; directory
+content changes before save cause a failed request rather than degraded success.
+
+For example, an intent request may contain:
+
+```json
+{"intent":"Analyze the service","binding":"role","catalog_version":"approved-release-v1"}
+```
+
+For SOP files, send the same options as multipart form fields. For SOP JSON,
+send them beside `sop_content`. Successful role PSOPs include `catalog_version`
+and task-level `binding`, `agent` (role ID), `role_version`, `skill` (skill ID)
+and `task_id`. Existing mixed role/instance templates can still be saved and
+executed, while new role generation produces role tasks only.
+
+Validation responses use HTTP 422 with a structured `message` in the normal
+envelope, for example:
+
+```json
+{"code":422,"status":"error","message":{"code":"INVALID_ROLE_SKILL","message":"Model selected an unapproved role/version/skill reference"},"data":null}
+```
+
+Generation codes are `CATALOG_VERSION_UNAVAILABLE`, `NO_APPROVED_ROLE_SKILL`,
+`INVALID_ROLE_SKILL` and `INVALID_GENERATED_WORKFLOW`. Invalid mode/version
+parameter combinations also return 422. Model/service failures remain server
+errors (500); they are not reported as generated-content validation failures.
+See [Role Binding Pilot](Role%20Binding%20Pilot.md) for configuration and limits.
 
 ## 3. Search Workflow Interface
 
@@ -928,5 +969,8 @@ These routes use `/rest/v1/orchestrate`, not `/api/v1`. Browser sessions and per
 | GET / DELETE | `/solution-packages/{pdf_filename}` | Get/remove one stored package; missing filename returns 404 |
 | PUT / DELETE | `/agent-cards/{organization}/{name}` | Admin-only registry proxy; PUT card name/organization must match URL |
 | GET | `/dispatch` | Required `intent` and `agent_name`; optional `lang`; returns SSE for one registered Agent |
+| GET | `/role-catalog` | Optional exact `catalog_version`; approved role/skill display projection from the configured release |
+| POST | `/generate-from-intent` | `user_intent`, optional `workflow_name`, `binding` (default `instance`) and role-only `catalog_version` |
+| POST | `/generate-from-preflow` | `preflow`, the same generation options, and `agent_cards` required only for instance mode |
 
 Encode each path component (spaces included); never concatenate untrusted names into URLs. There is no DELETE-all `/solution-packages` route. Sandbox routes are documented in section 8.

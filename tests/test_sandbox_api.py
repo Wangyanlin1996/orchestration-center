@@ -18,6 +18,8 @@
 import asyncio
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -162,6 +164,25 @@ def test_invalid_template_is_rejected(client):
     )
 
     assert response.status_code == 400
+    assert service.started is None
+
+
+@pytest.mark.parametrize("editor_snapshot", [True, False])
+def test_role_sandbox_rejects_before_registry_or_queue(client, monkeypatch, editor_snapshot):
+    api, service = client
+    payload = _psop().model_dump(mode="json")
+    payload["catalog_version"] = "synthetic-v1"
+    payload["steps"][0]["subtasks"][0].update(binding="role", role_version="1")
+    role_psop = PSOP.model_validate(payload)
+    monkeypatch.setattr(sandbox_api.SharedHandlers, "retrieval", lambda: SimpleNamespace(
+        get_psop_by_id=lambda _: role_psop))
+    registry = AsyncMock(return_value=[])
+    monkeypatch.setattr(sandbox_api, "get_agent_cards", registry)
+    response = api.post("/rest/v1/orchestrate/sandbox/wf-1/run",
+                        json={"psop": payload} if editor_snapshot else {})
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "ROLE_SANDBOX_NOT_SUPPORTED"
+    registry.assert_not_awaited()
     assert service.started is None
 
 

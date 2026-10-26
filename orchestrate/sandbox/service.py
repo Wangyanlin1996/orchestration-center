@@ -31,6 +31,7 @@ from orchestrate.sandbox.i18n import translate
 from orchestrate.sandbox.models import SandboxRunReport, StubScenario, StubTemplate
 from orchestrate.sandbox.runner import run_sandbox
 from orchestrate.sandbox.store import SandboxStore
+from orchestrate.sandbox.validation import require_instance_workflow
 from orchestrate.validation.sandbox_validator import SandboxCheckStatus
 
 
@@ -66,6 +67,7 @@ class SandboxService:
         templates: list[StubTemplate] | None = None,
         lang: str = "zh",
     ) -> str:
+        require_instance_workflow(psop)
         verification_id = str(uuid4())
         self._status[verification_id] = "queued"
         self._events[verification_id] = []

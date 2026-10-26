@@ -410,7 +410,8 @@ def serving(build_app):
 
 
 @pytest.mark.asyncio
-async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypatch, tmp_path):
+@pytest.mark.parametrize("generation", ["existing", "intent", "preflow"])
+async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypatch, tmp_path, generation):
     calls, host_cards, sdk_workflows, workers = [], [], [], {}
     records = []
     monkeypatch.setattr("orchestrate.handlers.dispatch.get_storage_handler",
@@ -466,6 +467,7 @@ async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypa
             description="Routing echo only", source=source, review_status="approved")])]))
         catalog_path.write_text(catalog.model_dump_json(), encoding="utf-8")
         monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path", lambda: str(catalog_path))
+        monkeypatch.setattr("orchestrate.core.role_generation.configured_catalog_path", lambda: str(catalog_path))
         monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path", lambda: str(registry_path))
         monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_authorized_instances",
                             lambda: ["technical-a", "technical-b"])
@@ -479,6 +481,28 @@ async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypa
                         if frame.startswith("data: ")]
 
             base_template, _, _ = prepared(port_a, port_b)
+            from orchestrate.core.catalog_gate import CatalogGate
+            from orchestrate.core.persistence import WorkflowStorage
+            store = WorkflowStorage(str(tmp_path / "generated-store"))
+            if generation != "existing":
+                from orchestrate.core.intent_psop_generator import IntentPsopGenerator
+                from orchestrate.core.psop_generator import PsopGenerator
+                from orchestrate.core.model.preflow import PreFlow
+                from orchestrate.core.role_generation import load_generation_context, validate_current_catalog
+                from tests.role_generation_helpers import JsonModel, structure_from_prompt
+
+                if generation == "intent":
+                    generator = IntentPsopGenerator.__new__(IntentPsopGenerator)
+                    generator._llm = JsonModel(base_template.model_dump(mode="json"))
+                    base_template = generator.generate_psop_from_intent(INTENT, [], binding="role")
+                else:
+                    generator = PsopGenerator.__new__(PsopGenerator)
+                    generator._llm = JsonModel(["Explore"], [dict(action_id="a1", role_id="test-optimizer",
+                        role_version="1", skill_id="explore")], structure_from_prompt)
+                    base_template = generator.generate_psop_workflow(PreFlow(name="Generated", steps_md="Explore"), [], binding="role")
+                validate_current_catalog(load_generation_context())
+            CatalogGate(SimpleNamespace(handle=store.save_psop)).handle(base_template)
+            base_template = store.load_psop(base_template.id)
             base_template_json = base_template.model_dump_json()
             for scenario in ("city-a", "city-b", "replacement", "mixed"):
                 city = "a" if scenario in {"city-a", "mixed"} else "b"
@@ -530,6 +554,7 @@ async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypa
                 assert template.model_dump_json() == original_template
             assert [city for city, _ in calls] == ["a", "b", "b", "a", "b"]
             assert base_template.model_dump_json() == base_template_json
+            assert store.load_psop(base_template.id).model_dump_json() == base_template_json
             changed = deepcopy(cards[0])
             changed.skills[0].name = "Changed after center freeze"
             host._agent_card_provider.load.return_value = [changed, cards[1]]
@@ -539,7 +564,7 @@ async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypa
             error = next(event["data"] for event in events if event["type"] == "error")
             assert error["code"] == "INSTANCE_SNAPSHOT_MISMATCH"
             assert error["reason"] == "REGISTRY_CARD_DRIFT"
-            assert error["task_ids"] == ["t1"]
+            assert error["task_ids"] == [base_template.steps[0].subtasks[0].task_id]
             assert error["instance_id"] == "technical-a"
             assert records[-1].execution_id == error["execution_id"]
             assert records[-1].status == ExecutionStatus.FAILED

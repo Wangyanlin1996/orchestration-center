@@ -7,6 +7,76 @@ instance workflow to the existing workflow-engine SDK. The SDK is unchanged.
 This pilot proves routing and transport behavior. It does not certify network
 optimization capability or provide production admission for autonomous agents.
 
+## Viewing and saving role templates
+
+The designer preserves catalog/version metadata, original task IDs, role/skill
+IDs, binding groups, step dependencies and context references when opening and
+saving role or mixed role/instance templates. Import conversion leaves the
+source object unchanged; canvas-only properties are excluded from saved PSOPs.
+
+Any workflow containing a role task has read-only graph structure and task
+content, including its instance tasks. Users can select, inspect, move and zoom
+nodes, and change the workflow name, description and tags in the save dialog.
+Deletion, reconnecting edges, merging nodes, dropping agents, clearing the
+canvas and replacing skills are blocked. Ordinary instance workflows retain
+their existing editing behavior.
+
+Execution state is projected onto the original role graph by original task ID.
+Resolved instance/skill details are displayed separately; they do not replace
+the saved role identity. Resolution evidence and structured rejection reasons
+are shown in the execution timeline. Errors identify canvas steps only through
+exact original task IDs; an unmapped SDK task ID remains a workflow-level error.
+
+Role workflows cannot use the current instance-only sandbox. The button
+explains this restriction, and direct sandbox requests return HTTP 422 with
+`ROLE_SANDBOX_NOT_SUPPORTED` before registry access or execution scheduling.
+Instance sandbox behavior is unchanged. Display names come from the approved
+projection of the template's exact catalog release, while IDs and versions
+remain visible and are used for serialization. If that release is unavailable,
+the designer retains the original IDs and shows a notice. The save dialog also
+offers **Download design JSON**, which works without catalog access or saving.
+
+## Generating role workflows
+
+Both intent and PreFlow/SOP generation support `binding: "role"` and an optional
+`catalog_version`. Omitting `binding` in an API request preserves instance
+generation. The frontend generation selector defaults to role mode; users can
+explicitly select instance compatibility. The graph builder retains its existing
+instance editing behavior. Existing workflows keep their original binding mode.
+
+Role generation does not load AgentCards or query the instance registry. It
+uses only approved roles and approved skills from `role_catalog_path`. New
+requests without a version select that configured release once; requests with
+a version require an exact match. Existing save/execution loaders retain their
+exact-version requirement and never fall back to another release.
+
+The shared context fixes the release content for the request. Before saving,
+the server checks its version, content fingerprint and approvals again, then
+uses the existing save handler and CatalogGate. A changed release rejects the
+request even if its version and skill IDs remain unchanged. This check does
+not provide a transaction spanning other processes publishing catalog files;
+publish release files immutably.
+
+PreFlow actions receive distinct action IDs, including repeated descriptions.
+Matching uses the joint role/version/skill identity. The structure stage must
+preserve every selected task and its identity exactly once. Explicit instance
+bindings, unapproved skills, wrong versions, role SelfLoop, duplicate IDs and
+changes to the selected task set are rejected. No fallback agent is used.
+
+The authenticated internal read-only endpoint
+`GET /rest/v1/orchestrate/role-catalog?catalog_version=<version>` returns the
+same approved display projection used for generation. It is rate limited and
+does not expose paths, source documents, instances or credentials. It does not
+introduce another catalog store or a catalog management API.
+
+For HTTP examples, response envelopes and error codes, see the
+[API reference](Orchestration%20Center%20API%20Reference.md).
+
+Generation logs include request ID, entry, binding, catalog version, stage,
+elapsed time and result/error code. They exclude raw model output and business
+intent. Deterministic model responses and real local Host/worker transport
+tests verify the technical path, not model quality or business capability.
+
 ## Configuration
 
 Configure the center with a reviewed, exact-version role catalog and an instance
