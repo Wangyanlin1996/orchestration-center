@@ -21,27 +21,19 @@ import { createWorkflow } from "@/service/api.js";
 import { createPortal } from "react-dom";
 import { transformReactFlowToPSOP } from "@/components/orchestration_center/workflow/utils/index.jsx";
 import SandboxDialog from "@/components/sandbox/SandboxDialog.jsx";
+import { hasRoleTasks } from '../rolePolicy.js';
+import { generationErrorMessage } from '../../generationErrors.js';
 
-const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, onCancel, onClear, onFitView, isDark, onSaveSuccess }) => {
+const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, workflowMetadata = {}, protectedWorkflow = false, onCancel, onClear, onFitView, isDark, onSaveSuccess }) => {
+    const roleWorkflow = protectedWorkflow || hasRoleTasks(workflowMetadata) || hasRoleTasks(nodes);
     const [showConfirm, setShowConfirm] = useState(false);
     const { t } = useTranslation();
     const [showExportModal, setShowExportModal] = useState(false);
     const [showSandboxDialog, setShowSandboxDialog] = useState(false);
     const [exportName, setExportName] = useState(workflowName || "");
     const [exportDesc, setExportDesc] = useState(workflowDescription || "");
+    const [exportTags, setExportTags] = useState(workflowMetadata.tags || []);
     const [toast, setToast] = useState({ show: false, msg: "", type: "error" });
-
-    useEffect(() => {
-        if (workflowName) {
-            setExportName(workflowName);
-        }
-    }, [workflowName]);
-
-    useEffect(() => {
-        if (workflowDescription) {
-            setExportDesc(workflowDescription);
-        }
-    }, [workflowDescription]);
 
     useEffect(() => {
         if (toast.show) {
@@ -51,6 +43,7 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
     }, [toast.show]);
 
     const handleClearClick = () => {
+        if (roleWorkflow) return;
         onClear();
         setShowConfirm(false);
     };
@@ -102,6 +95,31 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
         return null;
     };
 
+    const serializeDesign = () => transformReactFlowToPSOP(nodes, edges, {
+        ...workflowMetadata,
+        description: exportDesc === '' && workflowMetadata.description === null ? null : exportDesc,
+        id: workflowId || workflowMetadata.id,
+        name: exportName || workflowName,
+        tags: !exportTags.length && workflowMetadata.tags === null ? null : exportTags,
+    });
+
+    const downloadDesign = () => {
+        try {
+            const blob = new Blob([JSON.stringify(serializeDesign(), null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            try {
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `workflow-${String(workflowId || 'design').replace(/[^\w.-]/g, '_')}.json`;
+                link.click();
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+        } catch {
+            setToast({ show: true, msg: t('workflow.export.failed'), type: 'error' });
+        }
+    };
+
     const executeExport = () => {
         const errorMsg = validateWorkflow();
         if (errorMsg) {
@@ -112,17 +130,17 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
             });
             return;
         }
-        const psopData = transformReactFlowToPSOP(nodes, edges, { description: exportDesc, id: workflowId, name: exportName || workflowName });
         try {
+            const psopData = serializeDesign();
             createWorkflow(psopData).then(r => {
                 setToast({ show: true, msg: t('workflow.export.success'), type: 'success' });
                 setShowExportModal(false);
                 if (onSaveSuccess) onSaveSuccess(r?.data?.workflow_id || workflowId || null);
             }).catch(err => {
-                setToast({ show: true, msg: t('workflow.export.failed'), type: 'error' });
+                setToast({ show: true, msg: `${t('workflow.export.failed')}: ${generationErrorMessage(err)}`, type: 'error' });
             });
         } catch (e) {
-            console.error('Upload failed', e);
+            setToast({ show: true, msg: t('workflow.export.failed'), type: 'error' });
         }
     };
 
@@ -207,6 +225,23 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
                     />
                 </div>
 
+                <fieldset className="mb-6 space-y-2">
+                    <legend className="text-xs font-bold mb-2">{t('workflow.tagsLabel')}</legend>
+                    {exportTags.map((tag, index) => (
+                        <div className="flex gap-2" key={index}>
+                            <input aria-label={`${t('workflow.tagsLabel')} ${index + 1}`} value={tag}
+                                className={`flex-1 px-3 py-2 rounded-xl border ${theme.input}`}
+                                onChange={event => setExportTags(tags => tags.map((item, position) => position === index ? event.target.value : item))} />
+                            <button type="button" aria-label={t('workflow.removeTag')}
+                                onClick={() => setExportTags(tags => tags.filter((_, position) => position !== index))}>×</button>
+                        </div>
+                    ))}
+                    <button type="button" onClick={() => setExportTags(tags => [...tags, ''])}>{t('workflow.addTag')}</button>
+                </fieldset>
+
+                <button type="button" onClick={downloadDesign} className={`w-full mb-4 px-4 py-3 rounded-2xl border ${theme.input}`}>
+                    {t('workflow.downloadDesign')}
+                </button>
                 <div className="flex gap-4">
                     <button
                         onClick={() => setShowExportModal(false)}
@@ -263,7 +298,9 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
 
             {workflowId && (
                 <button
-                    onClick={() => setShowSandboxDialog(true)}
+                    onClick={() => { if (!roleWorkflow) setShowSandboxDialog(true); }}
+                    disabled={roleWorkflow}
+                    title={roleWorkflow ? t('workflow.roleSandboxUnsupported') : undefined}
                     className={`flex items-center gap-1 px-3 py-1.5 text-sm font-semibold rounded-xl transition-colors ${theme.secondaryBtn}`}
                 >
                     <FlaskConical className="w-4 h-4" />
@@ -273,6 +310,8 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
 
             <button
                 onClick={handleClearClick}
+                disabled={roleWorkflow}
+                title={roleWorkflow ? t('workflow.roleProtection') : undefined}
                 className={`flex items-center gap-1 px-3 py-1.5 text-sm font-semibold rounded-xl transition-colors ${theme.dangerBtn}`}
             >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -284,8 +323,9 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
 
             <button
                 onClick={() => {
-                    setExportName(prev => prev || workflowName || "");
-                    setExportDesc(prev => prev || workflowDescription || "");
+                    setExportName(workflowName ?? workflowMetadata.name ?? "");
+                    setExportDesc(workflowDescription ?? workflowMetadata.description ?? "");
+                    setExportTags(workflowMetadata.tags || []);
                     setShowExportModal(true);
                 }}
                 className={`ml-2 px-4 py-1.5 text-sm font-bold rounded-xl shadow-lg transition-all active:scale-95 flex items-center gap-1 ${theme.primaryBtn}`}
@@ -297,10 +337,11 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
                 {t('workflow.toolbar.export')}
             </button>
             {showExportModal && createPortal(ExportModal, document.body)}
-            {showSandboxDialog && (
+            {showSandboxDialog && !roleWorkflow && (
                 <SandboxDialog
                     workflowId={workflowId}
                     psop={transformReactFlowToPSOP(nodes, edges, {
+                        ...workflowMetadata,
                         id: workflowId || undefined,
                         name: workflowName,
                         description: workflowDescription,

@@ -50,6 +50,8 @@ import { getWorkflow, getWorkflowById, getStartProcessStreamUrl, matchWorkflowsT
 import { getAgentCards, getDispatchStreamUrl } from '@/service/api.js';
 import { transformWorkflowToReactFlow } from '@/components/orchestration_center/workflow/utils/index.jsx';
 import UnifiedWorkflow from '../orchestration_center/workflow/index.jsx';
+import { annotateWorkflowErrors, formatWorkflowError } from './workflowErrors.js';
+import { projectRoleExecution, roleTemplateFromEvents } from './workflowProjection.js';
 import ExecutionStatistics from './execution_statistics/index.jsx';
 import ExecutionTimeline from './timeline/index.jsx';
 import { SandboxReportView } from '@/components/sandbox/SandboxDialog.jsx';
@@ -430,7 +432,9 @@ const ExecutionCenter = ({ isDark }) => {
     const [isRunning, setIsRunning] = useState(false);
     const [events, setEvents] = useState([]);
     const [psopStatus, setPsopStatus] = useState(null);
+    const [executionTemplate, setExecutionTemplate] = useState(null);
     const [error, setError] = useState(null);
+    const [workflowError, setWorkflowError] = useState(null);
     const [nodes, setNodes] = useState([]);
     const [edges, setEdges] = useState([]);
     const [eventSource, setEventSource] = useState(null);
@@ -540,6 +544,8 @@ const ExecutionCenter = ({ isDark }) => {
         setMatchedWorkflows([]);
         setSelectedId(null);
         setPsopStatus(null);
+        setExecutionTemplate(null);
+        setWorkflowError(null);
         setNodes([]);
         setEdges([]);
     }, []);
@@ -577,6 +583,8 @@ const ExecutionCenter = ({ isDark }) => {
         setError(null);
         setEvents([]);
         setPsopStatus(null);
+        setExecutionTemplate(null);
+        setWorkflowError(null);
         setIsDispatching(true);
         setIsRunning(true);
         setAutoScroll(true);
@@ -604,11 +612,15 @@ const ExecutionCenter = ({ isDark }) => {
                         setWorkflowSource('retrieved');
                         setMatchedWorkflows([{ workflow_id: 'dispatch', name: data.data?.workflow || 'Workflow', description: userIntent || '' }]);
                         break;
+                    case 'resolution':
+                        setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
+                        break;
                     case 'psop_update':
                         try {
                             const status = typeof data.data.psop === 'string'
                                 ? JSON.parse(data.data.psop)
                                 : data.data.psop;
+                            setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
                             setPsopStatus(status);
                         } catch (e) {
                             console.error('Failed to parse psop_update data:', e);
@@ -624,7 +636,8 @@ const ExecutionCenter = ({ isDark }) => {
                         break;
                     case 'dispatch_error':
                     case 'error':
-                        setError(data.data.error || 'Dispatch failed');
+                        setWorkflowError(data.data || data);
+                        setError(formatWorkflowError(data.data || data));
                         setIsRunning(false);
                         setIsDispatching(false);
                         setRunningId(null);
@@ -676,6 +689,8 @@ const ExecutionCenter = ({ isDark }) => {
         setMatchedWorkflows([]);
         setSelectedId(null);
         setPsopStatus(null);
+        setExecutionTemplate(null);
+        setWorkflowError(null);
         setNodes([]);
         setEdges([]);
     }, []);
@@ -688,6 +703,8 @@ const ExecutionCenter = ({ isDark }) => {
             setEdges([]);
             setSelectedId(null);
             setPsopStatus(null);
+            setExecutionTemplate(null);
+            setWorkflowError(null);
             setError(null);
 
             const res = await getWorkflow();
@@ -819,6 +836,8 @@ const ExecutionCenter = ({ isDark }) => {
         setEdges([]);
         setSelectedId(null);
         setPsopStatus(null);
+        setExecutionTemplate(null);
+        setWorkflowError(null);
         setMatchedWorkflows([]);
         setWorkflowSource(null);
         setError(null);
@@ -849,6 +868,8 @@ const ExecutionCenter = ({ isDark }) => {
         setSelectedId(workflowId);
         setWorkflowSource('retrieved');
         setPsopStatus(null);
+        setExecutionTemplate(null);
+        setWorkflowError(null);
         setMatchedWorkflows(workflowCandidates);
         setWorkflowCandidates([]);
     };
@@ -873,28 +894,30 @@ const ExecutionCenter = ({ isDark }) => {
             if (res.status === 'success') {
                 const record = res.data;
                 setSelectedExecutionId(executionId);
-                if (record.final_psop) setPsopStatus(record.final_psop);
-                if (record.events && record.events.length > 0) {
-                    const displayEvents = record.events.filter(e => {
-                        const t = e.type;
-                        return t === 'step_start' || t === 'step_complete' ||
-                            t === 'task_request' || t === 'task_response' ||
-                            t === 'task_status_changed' ||
-                            t === 'agent_request' || t === 'agent_response' ||
-                            t === 'agent_status_update' || t === 'agent_artifact_update' ||
-                            t === 'negotiation_request' || t === 'negotiation_resolved' ||
-                            t === 'negotiation_failed' ||
-                            t === 'complete' || t === 'error' || t === 'close' ||
-                            t === 'workflow_complete';
-                    });
-                    setEvents(displayEvents);
-                }
+                setExecutionTemplate(roleTemplateFromEvents(record.events));
+                setPsopStatus(record.final_psop || null);
+                const displayEvents = (record.events || []).filter(e => {
+                    const t = e.type;
+                    return t === 'step_start' || t === 'step_complete' ||
+                        t === 'task_request' || t === 'task_response' ||
+                        t === 'task_status_changed' ||
+                        t === 'agent_request' || t === 'agent_response' ||
+                        t === 'agent_status_update' || t === 'agent_artifact_update' ||
+                        t === 'negotiation_request' || t === 'negotiation_resolved' ||
+                        t === 'negotiation_failed' ||
+                        t === 'resolution' || t === 'dispatch_error' ||
+                        t === 'complete' || t === 'error' || t === 'close' ||
+                        t === 'workflow_complete';
+                });
+                setEvents(displayEvents);
                 setIsRunning(false);
                 setRunningId(null);
                 setSelectedSandboxReport(null);
                 setSelectedId(record.psop_id);
                 setWorkflowSource('retrieved');
-                setError(null);
+                const failure = record.events?.findLast(event => event.type === 'error' || event.type === 'dispatch_error');
+                setError(failure ? formatWorkflowError(failure.data) : null);
+                setWorkflowError(failure?.data || null);
             }
         } catch (err) {
             console.error("Failed to load execution record detail:", err);
@@ -934,17 +957,18 @@ const ExecutionCenter = ({ isDark }) => {
     }, [autoScroll]);
 
     useEffect(() => {
-        if (psopStatus) {
-            const { nodes: n, edges: e } = transformWorkflowToReactFlow(psopStatus);
-            setNodes(n);
+        let cancelled = false;
+        if (psopStatus || executionTemplate) {
+            const { nodes: n, edges: e } = transformWorkflowToReactFlow(projectRoleExecution(executionTemplate, psopStatus));
+            setNodes(annotateWorkflowErrors(n, workflowError));
             setEdges(e);
         } else if (selectedId && selectedId !== 'dispatch') {
             (async () => {
                 try {
                     const res = await getWorkflowById(selectedId);
-                    if (res.status === 'success') {
+                    if (!cancelled && res.status === 'success') {
                         const { nodes: n, edges: e } = transformWorkflowToReactFlow(res.data);
-                        setNodes(n);
+                        setNodes(annotateWorkflowErrors(n, workflowError));
                         setEdges(e);
                     }
                 } catch (err) {
@@ -952,7 +976,8 @@ const ExecutionCenter = ({ isDark }) => {
                 }
             })();
         }
-    }, [psopStatus, selectedId]);
+        return () => { cancelled = true; };
+    }, [psopStatus, executionTemplate, selectedId, workflowError]);
 
     // Stop execution
     const stopExecution = useCallback(() => {
@@ -977,6 +1002,10 @@ const ExecutionCenter = ({ isDark }) => {
         setError(null);
         setEvents([]);
         setPsopStatus(null);
+        setExecutionTemplate(null);
+        setWorkflowError(null);
+        setNodes([]);
+        setEdges([]);
         setIsRunning(true);
         setRunningId(idToRun);
         setAutoScroll(true);
@@ -992,11 +1021,15 @@ const ExecutionCenter = ({ isDark }) => {
                 setEvents(prev => [...prev, data]);
 
                 switch (data.type) {
+                    case 'resolution':
+                        setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
+                        break;
                     case 'psop_update':
                         try {
                             const status = typeof data.data.psop === 'string'
                                 ? JSON.parse(data.data.psop)
                                 : data.data.psop;
+                            setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
                             setPsopStatus(status);
                         } catch (e) {
                             console.error("Failed to parse psop_update data:", e);
@@ -1008,8 +1041,10 @@ const ExecutionCenter = ({ isDark }) => {
                         setRunningId(null);
                         es.close();
                         break;
+                    case 'dispatch_error':
                     case 'error':
-                        setError(data.data.error);
+                        setWorkflowError(data.data || data);
+                        setError(formatWorkflowError(data.data || data));
                         setIsRunning(false);
                         setRunningId(null);
                         es.close();
@@ -1387,7 +1422,7 @@ const ExecutionCenter = ({ isDark }) => {
                                 matchedWorkflows.map(wf => (
                                     <div 
                                         key={wf.workflow_id}
-                                        onClick={() => { setSelectedId(wf.workflow_id); setWorkflowSource('retrieved'); setPsopStatus(null); }}
+                                        onClick={() => { setSelectedId(wf.workflow_id); setWorkflowSource('retrieved'); setPsopStatus(null); setExecutionTemplate(null); setWorkflowError(null); }}
                                         className={`group relative p-4 rounded-xl border transition-all cursor-pointer
                                             ${selectedId === wf.workflow_id 
                                                 ? 'bg-blue-50 dark:bg-blue-950/20 border-blue-300 dark:border-blue-800 shadow-sm' 
@@ -1734,7 +1769,7 @@ const ExecutionCenter = ({ isDark }) => {
                         {selectedSandboxReport ? (
                             <SandboxReportView report={selectedSandboxReport} isDark={isDark} />
                         ) : (
-                            <ExecutionTimeline events={events} isDark={isDark} isRunning={isRunning || isDispatching} />
+                            <ExecutionTimeline events={events} workflow={executionTemplate || psopStatus} isDark={isDark} isRunning={isRunning || isDispatching} />
                         )}
                     </div>
                 </div>

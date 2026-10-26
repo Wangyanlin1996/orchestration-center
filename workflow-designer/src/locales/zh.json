@@ -133,9 +133,13 @@
     "filter_tags": "标签",
     "summary_title": "执行总结",
     "summary_placeholder": "总结内容即将上线",
-    "summary_hint": "等待后端接口对接"
+    "summary_hint": "等待后端接口对接",
+    "roleResolution": "角色解析结果"
   },
   "orchestration": {
+    "generationMode": "生成模式",
+    "roleMode": "角色目录",
+    "instanceMode": "实例兼容",
     "title": "编排中心",
     "list_label": "核心运维流",
     "method_import": "解决方案包导入",
@@ -369,11 +373,20 @@
       "title": "确认退出",
       "desc": "您有未保存的修改，退出将丢失这些修改。确定要退出吗？"
     },
-    "selfLoop": "自处理"
+    "selfLoop": "自处理",
+    "roleProtection": "角色流程已保护，暂不支持修改任务和连接；可修改名称、描述、标签和布局。",
+    "roleIdentity": "角色版本",
+    "downloadDesign": "下载设计 JSON",
+    "catalogUnavailable": "对应版本的角色目录不可用，仍显示原始 ID 和版本；保存与执行仍需通过目录校验。",
+    "resolvedInstance": "执行实例",
+    "roleSandboxUnsupported": "角色流程需通过 Host 校验执行，当前实例沙箱暂不支持。",
+    "tagsLabel": "标签",
+    "addTag": "添加标签",
+    "removeTag": "删除标签"
   },
   "registry": {
     "title": "Agent库",
-"search_placeholder": "搜索智能体名称或功能...",
+    "search_placeholder": "搜索智能体名称或功能...",
     "units": "个",
     "online": "在线",
     "skills_count": "个技能",

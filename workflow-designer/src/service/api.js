@@ -173,7 +173,10 @@ export async function importTemplate(templateId) {
 // flow) actually see a rejection instead of silently getting `undefined`.
 function unwrapEnvelope(body) {
     if (body.status === 'error') {
-        throw new Error(body.message || 'Request failed');
+        const detail = body.message;
+        const message = typeof detail === 'string' ? detail
+            : [detail?.code, detail?.message].filter(Boolean).join(': ');
+        throw new Error(message || 'Request failed');
     }
     return body.data;
 }
@@ -203,18 +206,31 @@ export async function deleteSolutionPackage(pdfFilename) {
 
 // 鈹€鈹€鈹€鈹€ Workflow Generation 鈹€鈹€鈹€鈹€
 
-export async function handlePlan(preflow, agentCards) {
+export async function getRoleCatalog(catalogVersion) {
+    return unwrapEnvelope(await api.get(`${ORCHESTRATE_BASE()}/role-catalog`, {
+        params: catalogVersion ? { catalog_version: catalogVersion } : {},
+    }));
+}
+
+const generationOptions = ({ binding, catalog_version }) => ({
+    ...(binding === undefined ? {} : { binding }),
+    ...(catalog_version === undefined ? {} : { catalog_version }),
+});
+
+export async function handlePlan(preflow, agentCards, options = {}) {
     const body = await api.post(`${ORCHESTRATE_BASE()}/generate-from-preflow`, {
         preflow: preflow,
-        agent_cards: agentCards
+        ...(agentCards === undefined ? {} : { agent_cards: agentCards }),
+        ...generationOptions(options),
     });
     return unwrapEnvelope(body);
 }
 
-export async function generateWorkflowFromIntent(intent, name = "Generated Workflow") {
+export async function generateWorkflowFromIntent(intent, name = "Generated Workflow", options = {}) {
     const body = await api.post(`${ORCHESTRATE_BASE()}/generate-from-intent`, {
         user_intent: intent,
-        workflow_name: name
+        workflow_name: name,
+        ...generationOptions(options),
     });
     return unwrapEnvelope(body) || body;
 }
