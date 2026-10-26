@@ -35,12 +35,13 @@ Endpoints:
 import os
 import re
 import tempfile
+from functools import partial
 from typing import Any, Optional
 
 import anyio
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, Depends
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from common.config import FLOW_CTL_START_PROCESS_STREAM, FLOW_CTL_PLAN, FLOW_CTL_GENERATE_PSOP, MAX_FILE_SIZE_BYTES
 from orchestrate.handlers.dispatch import get_storage_handler
@@ -48,6 +49,8 @@ from orchestrate.persistence.errors import StorageError
 from orchestrate.server.storage_error_response import storage_http_exception
 from common.custom.interface_type import InterfaceType
 from orchestrate.core.intent_psop_generator import IntentPsopGenerator
+from orchestrate.core.role_generation import GenerationOptions, RoleGenerationError, RoleGenerationServiceError
+from orchestrate.server.generation_support import prepare_generation, role_arguments, validate_before_save, generation_http_exception
 from orchestrate.core.model.preflow import PreFlow
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.psop_generator import PsopGenerator
@@ -70,11 +73,11 @@ intent_semaphore = anyio.Semaphore(int(config.get(FLOW_CTL_GENERATE_PSOP, 10)))
 # Request Models
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class SOPOrchestrateRequest(BaseModel):
+class SOPOrchestrateRequest(GenerationOptions):
     sop_content: str = Field(..., min_length=1, max_length=50000, description="Natural language SOP steps (markdown text)")
     name: Optional[str] = Field(None, max_length=256, description="Optional workflow name")
 
-class IntentOrchestrateRequest(BaseModel):
+class IntentOrchestrateRequest(GenerationOptions):
     intent: str = Field(..., min_length=1, max_length=10000, description="Natural language intent or task description")
     name: Optional[str] = Field(None, max_length=256, description="Optional workflow name")
 
@@ -98,6 +101,8 @@ async def orchestrate_sop(
     request: Request,
     file: Optional[UploadFile] = File(None),
     name: Optional[str] = Form(None),
+    binding: Optional[str] = Form(None),
+    catalog_version: Optional[str] = Form(None),
     _: Any = Depends(RateLimiter(config, "sop_orchestrate"))
 ):
     """
@@ -126,7 +131,18 @@ async def orchestrate_sop(
                 raw_body = await request.json()
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid JSON body")
+            try:
+                options = GenerationOptions.model_validate(raw_body)
+            except ValidationError as error:
+                raise HTTPException(status_code=422, detail="Invalid generation options") from error
             body = SOPOrchestrateRequest.model_validate(raw_body)
+        else:
+            try:
+                options = GenerationOptions(binding=binding if binding is not None else "instance", catalog_version=catalog_version)
+            except ValidationError as error:
+                raise HTTPException(status_code=422, detail="Invalid generation options") from error
+
+        context = await anyio.to_thread.run_sync(partial(prepare_generation, options, "external_sop"))
 
         if file:
             filename = file.filename or ""
@@ -177,22 +193,25 @@ async def orchestrate_sop(
         if not sop_text or not sop_text.strip():
             raise HTTPException(status_code=400, detail="SOP content is empty")
 
-        agent_cards = await get_agent_cards()
+        agent_cards = [] if context else await get_agent_cards()
         preflow = PreFlow(name=workflow_name or "SOP Workflow", steps_md=sop_text)
         generator = PsopGenerator()
         # 同步 LLM 调用(分钟级),卸载到线程避免阻塞事件循环
         psop = await anyio.to_thread.run_sync(
-            generator.generate_psop_workflow, preflow, agent_cards, abandon_on_cancel=False,
+            partial(generator.generate_psop_workflow, preflow, agent_cards, **role_arguments(context)), abandon_on_cancel=False,
         )
         psop.user_intent = sop_text[:200]
         psop.related_preflow = preflow.id
 
+        await anyio.to_thread.run_sync(validate_before_save, psop, context)
         SharedHandlers.save_psop().handle(psop)
         return created(data=psop.model_dump(), message="PSOP generated and saved")
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")
     except HTTPException:
         raise
+    except (RoleGenerationError, RoleGenerationServiceError) as error:
+        raise generation_http_exception(error) from error
     except StorageError as e:
         raise storage_http_exception(e) from e
     except Exception as e:
@@ -222,20 +241,24 @@ async def orchestrate_intent(
     try:
         intent_semaphore.acquire_nowait()
         acquired = True
-        agent_cards = await get_agent_cards()
+        context = await anyio.to_thread.run_sync(partial(prepare_generation, body, "external_intent"))
+        agent_cards = [] if context else await get_agent_cards()
         generator = IntentPsopGenerator()
         # 同步 LLM 调用(分钟级),卸载到线程避免阻塞事件循环
         psop = await anyio.to_thread.run_sync(
-            generator.generate_psop_from_intent, body.intent, agent_cards, body.name,
+            partial(generator.generate_psop_from_intent, body.intent, agent_cards, body.name, **role_arguments(context)),
             abandon_on_cancel=False,
         )
 
+        await anyio.to_thread.run_sync(validate_before_save, psop, context)
         SharedHandlers.save_psop().handle(psop)
         return created(data=psop.model_dump(), message="PSOP generated and saved")
     except anyio.WouldBlock:
         raise HTTPException(status_code=503, detail="Server is busy")
     except HTTPException:
         raise
+    except (RoleGenerationError, RoleGenerationServiceError) as error:
+        raise generation_http_exception(error) from error
     except StorageError as e:
         raise storage_http_exception(e) from e
     except Exception as e:

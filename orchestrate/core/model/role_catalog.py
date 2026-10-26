@@ -96,9 +96,14 @@ class RoleCatalog(CatalogModel):
                 raise ValueError(f"INVALID_ROLE_SKILL: {task.task_id}")
 
 
+def read_role_catalog(path: str | Path) -> RoleCatalog:
+    """Read one explicitly configured release, without selecting another file."""
+    return RoleCatalog.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
 def load_role_catalog(path: str | Path, expected_version: str) -> RoleCatalog:
     """Read an explicit local release; never silently fall back to latest."""
-    catalog = RoleCatalog.model_validate_json(Path(path).read_text(encoding="utf-8"))
+    catalog = read_role_catalog(path)
     if catalog.catalog_version != expected_version:
         raise ValueError("CATALOG_VERSION_UNAVAILABLE")
     return catalog
