@@ -93,9 +93,9 @@ def partial_group_key_card(name, port, instance_skill, execution_skill):
     """An incomplete AND group in front of a configured alternative.
 
     (key1 AND auxiliary) OR key2 with auxiliary unconfigured: the SDK
-    processes the first group (key1's login runs before the group fails
-    at unconfigured auxiliary) and then adopts key2, whose declaration
-    spells the header lowercase.
+    skips the first group at unconfigured auxiliary and adopts key2,
+    whose declaration spells the header lowercase. Protobuf map order
+    determines whether key1 logs in before auxiliary is encountered.
     """
     card = base_card(name, port, instance_skill, execution_skill)
     card["securitySchemes"] = {
@@ -658,6 +658,13 @@ async def test_skipped_group_configurations_do_not_affect_the_adopted_scheme():
     login_calls, raw_auth_keys, auth_values = [], [], []
     executor = EchoExecutor()
     token = TOKEN
+    # A protobuf map has no guaranteed iteration order. The incomplete
+    # group may fail at auxiliary before key1 is visited, or after key1
+    # logs in. Either way the adopted key2 must log in exactly once.
+    allowed_login_sequences = (
+        [{"fixture": "key2-login"}],
+        [{"fixture": "key1-login"}, {"fixture": "key2-login"}],
+    )
 
     with serving(watched_auth_app(executor, login_calls, raw_auth_keys,
                                   auth_values, token=token,
@@ -688,11 +695,8 @@ async def test_skipped_group_configurations_do_not_affect_the_adopted_scheme():
         await host.execute(context(metadata), queue)
 
         assert queue.events[-1].status.state == TaskState.TASK_STATE_COMPLETED
-        # The SDK processed the incomplete group first — key1 logged in
-        # before the group failed at unconfigured auxiliary and was
-        # skipped — then adopted key2, whose login produced the header.
-        assert sorted(login_calls, key=lambda call: call["fixture"]) == [
-            {"fixture": "key1-login"}, {"fixture": "key2-login"}]
+        assert login_calls in allowed_login_sequences
+        successful_login_count = len(login_calls)
         # Aligned to the adopted group's lowercase declaration: one header.
         assert raw_auth_keys == [b"x-api-key"]
         assert auth_values == [token]
@@ -710,10 +714,10 @@ async def test_skipped_group_configurations_do_not_affect_the_adopted_scheme():
         await conflicting.execute(context(metadata), queue)
 
         assert queue.events[-1].status.state == TaskState.TASK_STATE_FAILED
-        # Both logins ran again; no new business request left the host.
-        assert sorted(login_calls, key=lambda call: call["fixture"]) == [
-            {"fixture": "key1-login"}, {"fixture": "key1-login"},
-            {"fixture": "key2-login"}, {"fixture": "key2-login"}]
+        # A new host has its own credentials cache. Check this attempt
+        # independently: key1 is still optional, key2 must log in once,
+        # and no new business request may leave the host.
+        assert login_calls[successful_login_count:] in allowed_login_sequences
         assert raw_auth_keys == [b"x-api-key"]
         assert auth_values == [token]
         assert len(executor.inputs) == 1
