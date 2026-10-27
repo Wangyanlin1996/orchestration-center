@@ -7,8 +7,10 @@
 
 This adapter turns live AgentCards and server.conf into resolver inputs. The
 server authorization list is a deployment-wide ceiling, not a per-user ACL.
-Only single-interface HTTP+JSON cards without authentication or required
-extensions pass the current pilot prerequisites. It performs no network probes.
+Candidate prerequisites: the registry endpoint must hit a declared HTTP+JSON
+interface, every declared interface URL must be clean HTTP(S), and
+authentication declarations must be structurally complete. It performs no
+network probes.
 """
 
 from typing import Literal, Optional
@@ -17,6 +19,7 @@ from uuid import uuid4
 from loguru import logger
 from pydantic import BaseModel, Field, PrivateAttr
 
+from host_agent.role_contract import auth_declaration_complete, interface_url_admissible
 from orchestrate.core.model.instance_binding import (
     InstanceRegistry, ObservedInstance, ResolutionContext, ResolutionPolicy,
     ServiceScope, load_instance_registry,
@@ -120,28 +123,45 @@ def build_context_and_policy(request: ResolutionRequest | None):
     return context, policy
 
 
-def _card_endpoint(card) -> str:
-    """Endpoint preference: explicit ``url`` first, then a single interface."""
+def _declared_endpoints(card) -> list[str]:
+    """Every endpoint the card declares: explicit ``url`` plus interface URLs."""
+    endpoints = []
     url = str(getattr(card, "url", "") or "").strip()
     if url:
-        return url
-    interfaces = getattr(card, "supported_interfaces", None) or []
-    if len(interfaces) == 1:
-        return str(getattr(interfaces[0], "url", "") or "").strip()
-    return ""
+        endpoints.append(url)
+    for interface in getattr(card, "supported_interfaces", None) or []:
+        interface_url = str(getattr(interface, "url", "") or "").strip()
+        if interface_url:
+            endpoints.append(interface_url)
+    return endpoints
 
 
 def _cards_by_identity(agent_cards) -> dict:
-    """Reject conflicting duplicate identities instead of choosing by input order."""
+    """Reject conflicting duplicate identities instead of choosing by input order.
+
+    A card is registered under every declared endpoint, so a registry instance
+    pinning any of them can observe it; two cards sharing one identity with
+    different content are rejected.
+    """
     cards_by_identity = {}
     for card in agent_cards or []:
-        identity = (str(getattr(card, "name", "") or ""), _card_endpoint(card))
-        if identity in cards_by_identity:
-            if _card_payload(cards_by_identity[identity]) != _card_payload(card):
-                raise ResolutionError("INSTANCE_SNAPSHOT_MISMATCH", "Conflicting duplicate card identity")
-            continue
-        cards_by_identity[identity] = card
+        for endpoint in _declared_endpoints(card):
+            identity = (str(getattr(card, "name", "") or ""), endpoint)
+            if identity in cards_by_identity:
+                if _card_payload(cards_by_identity[identity]) != _card_payload(card):
+                    raise ResolutionError("INSTANCE_SNAPSHOT_MISMATCH", "Conflicting duplicate card identity")
+                continue
+            cards_by_identity[identity] = card
     return cards_by_identity
+
+
+def _interfaces_admissible(payload: dict) -> bool:
+    """Every declared interface URL is HTTP(S) with a host and no credentials."""
+    interfaces = payload.get("supportedInterfaces")
+    if not isinstance(interfaces, list) or not interfaces:
+        return False
+    return all(isinstance(interface, dict) and interface_url_admissible(interface.get("url"))
+               for interface in interfaces)
 
 
 def project_observations(
@@ -166,12 +186,12 @@ def project_observations(
         payload = _card_payload(card)
         interfaces = payload.get("supportedInterfaces", [])
         prerequisites = (
-            len(interfaces) == 1
-            and interfaces[0].get("protocolBinding") == "HTTP+JSON"
-            and interfaces[0].get("url") == instance.endpoint
-            and not payload.get("securitySchemes")
-            and not payload.get("securityRequirements")
-            and not any(e.get("required") for e in payload.get("capabilities", {}).get("extensions", []))
+            _interfaces_admissible(payload)
+            and any(isinstance(interface, dict)
+                    and interface.get("protocolBinding") == "HTTP+JSON"
+                    and str(interface.get("url", "") or "") == instance.endpoint
+                    for interface in interfaces)
+            and auth_declaration_complete(payload)
         )
         observations.append(ObservedInstance(
             instance_id=instance.instance_id,

@@ -238,6 +238,18 @@ class TestStoreSolutionPackage:
         assert data["chapters"] == new_chapters
         assert data["chapter_count"] == 1
 
+    def test_reparse_keeps_generated_workflow_links(self, manager, sample_chapters):
+        """Re-parsing a package must not drop workflows generated earlier"""
+        manager.store_solution_package("test.pdf", sample_chapters)
+        assert manager.link_workflow("test.pdf", "wf-role", "role") is True
+
+        manager.store_solution_package("test.pdf", {"New Chapter": "New content"})
+        data = manager.retrieve_by_filename("test.pdf")
+
+        assert data["chapters"] == {"New Chapter": "New content"}
+        assert data["workflow_id"] == "wf-role"
+        assert data["workflow_bindings"] == {"role": "wf-role"}
+
 
 class TestRetrieveByFilename:
     """Test retrieve_by_filename method"""
@@ -352,6 +364,58 @@ class TestGetChapterContent:
         """Test getting chapter from non-existent file"""
         content = manager.get_chapter_content("nonexistent.pdf", "Chapter 1")
         assert content is None
+
+
+class TestLinkWorkflow:
+    """Test link_workflow method"""
+
+    def test_link_unknown_package(self, manager):
+        """Linking a package that was never stored fails"""
+        assert manager.link_workflow("missing.pdf", "wf-1") is False
+
+    def test_link_records_latest_and_binding_slot(self, manager, sample_chapters):
+        """A link updates workflow_id and its own binding slot"""
+        manager.store_solution_package("test.pdf", sample_chapters)
+
+        assert manager.link_workflow("test.pdf", "wf-instance", "instance") is True
+
+        data = manager.retrieve_by_filename("test.pdf")
+        assert data["workflow_id"] == "wf-instance"
+        assert data["workflow_bindings"] == {"instance": "wf-instance"}
+
+    def test_role_link_does_not_overwrite_instance_link(self, manager, sample_chapters):
+        """Role and instance generations of one package coexist"""
+        manager.store_solution_package("test.pdf", sample_chapters)
+
+        assert manager.link_workflow("test.pdf", "wf-instance", "instance") is True
+        assert manager.link_workflow("test.pdf", "wf-role", "role") is True
+
+        data = manager.retrieve_by_filename("test.pdf")
+        assert data["workflow_bindings"]["instance"] == "wf-instance"
+        assert data["workflow_bindings"]["role"] == "wf-role"
+        assert data["workflow_id"] == "wf-role"
+
+    def test_relink_same_binding_replaces_only_that_slot(self, manager, sample_chapters):
+        """Regenerating one binding keeps the other binding's workflow"""
+        manager.store_solution_package("test.pdf", sample_chapters)
+        manager.link_workflow("test.pdf", "wf-role-1", "role")
+        manager.link_workflow("test.pdf", "wf-instance", "instance")
+
+        assert manager.link_workflow("test.pdf", "wf-role-2", "role") is True
+
+        data = manager.retrieve_by_filename("test.pdf")
+        assert data["workflow_bindings"] == {"role": "wf-role-2", "instance": "wf-instance"}
+        assert data["workflow_id"] == "wf-role-2"
+
+    def test_invalid_binding_is_rejected_without_write(self, manager, sample_chapters):
+        """Unknown bindings must not corrupt the stored record"""
+        manager.store_solution_package("test.pdf", sample_chapters)
+
+        assert manager.link_workflow("test.pdf", "wf-x", "catalog") is False
+
+        data = manager.retrieve_by_filename("test.pdf")
+        assert "workflow_id" not in data
+        assert "workflow_bindings" not in data
 
 
 class TestSearchChaptersByKeyword:

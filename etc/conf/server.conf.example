@@ -53,7 +53,9 @@ role_catalog_path=
 # Missing/short keys keep ROLE_EXECUTION_NOT_ENABLED; Host rejects changed or
 # expired proofs, snapshot mismatches, registry drift, and ambiguous selected names.
 # Contract, policy context, limitations and verification: docs/en/Role Binding Pilot.md
-# Pilot cards must use one HTTP+JSON interface without auth or required extensions.
+# Role candidates may declare multiple interfaces, complete authentication and
+# required extensions; the registry endpoint pins the dispatch interface, the
+# Host enforces the extension and authentication policy at dispatch time.
 agent_registry_url=http://127.0.0.1:5000
 # Outbound authentication material is separate from the server's TLS identity.
 agent_registry.token_env=REGISTRY_ACCESS_TOKEN

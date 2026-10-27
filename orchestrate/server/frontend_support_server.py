@@ -35,7 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from google.protobuf.json_format import Parse, MessageToDict
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette import status
 from starlette.responses import Response
 
@@ -70,6 +70,8 @@ from orchestrate.server.account_auth import AccountLogin, authenticate_account, 
 from orchestrate.server.sandbox_api import sandbox_router, sandbox_service
 from orchestrate.core.psop_generator import PsopGenerator, WorkflowGeneratorError
 from orchestrate.core.intent_psop_generator import IntentPsopGenerator
+from orchestrate.core.role_generation import GenerationOptions, RoleGenerationError, RoleGenerationServiceError, load_generation_context
+from orchestrate.server.generation_support import prepare_generation, role_arguments, validate_before_save, generation_http_exception
 from orchestrate.core.workflow_search_result import WorkflowSearchResult
 from orchestrate.server.middleware import ConnectionLimitMiddleware, TimeoutMiddleware, RateLimiter, LoginRateLimiter
 from orchestrate.core.shared_handlers import SharedHandlers
@@ -236,14 +238,20 @@ app.middleware("http")(auth_middleware)
 
 # ──── Request models ────
 
-class PlanRequest(BaseModel):
+class PlanRequest(GenerationOptions):
     preflow: dict = Field(..., description="PreFlow model JSON")
-    agent_cards: List[dict] = Field(..., description="AgentCard list JSON")
+    agent_cards: Optional[List[dict]] = Field(None, description="AgentCards, required only for instance generation")
+
+    @model_validator(mode="after")
+    def require_instance_cards(self):
+        if self.binding == "instance" and self.agent_cards is None:
+            raise ValueError("agent_cards is required for instance generation")
+        return self
 
 class SavePSOPRequest(BaseModel):
     psop: dict = Field(..., description="PSOP model JSON")
 
-class IntentRequest(BaseModel):
+class IntentRequest(GenerationOptions):
     user_intent: str = Field(..., min_length=1, max_length=10000, description="Natural language intent description")
     workflow_name: Optional[str] = Field(None, description="Optional workflow name")
 
@@ -252,6 +260,17 @@ class RetrieveIntentRequest(BaseModel):
 
 # ──── Router ────
 router = APIRouter(prefix="/rest/v1/orchestrate")
+
+
+@router.get("/role-catalog")
+async def role_catalog(catalog_version: str | None = Query(None, min_length=1, max_length=1024),
+                       _: Any = Depends(RateLimiter(config, "role_catalog"))):
+    """Read-only approved display projection from the same configured release."""
+    try:
+        context = await anyio.to_thread.run_sync(partial(load_generation_context, catalog_version, entry="catalog_display"))
+        return ok(data=context.projection())
+    except RoleGenerationError as error:
+        raise generation_http_exception(error) from error
 
 # ---- Access authentication ----
 
@@ -724,23 +743,26 @@ async def generate_from_preflow(
         acquired = True
         preflow_name = request.preflow.get("name", "unknown")
         preflow_steps_md = request.preflow.get("steps_md", "")
-        logger.info(f"Generating PSOP from PreFlow: {preflow_name}, agents={len(request.agent_cards)}")
-        logger.info(f"PreFlow steps_md ({len(preflow_steps_md)} chars):\n{preflow_steps_md}")
+        context = await anyio.to_thread.run_sync(partial(prepare_generation, request, "internal_preflow"))
+        logger.info("Generating PSOP from PreFlow binding={} steps_chars={}", request.binding, len(preflow_steps_md))
 
         generator = PsopGenerator()
         # 串行多次同步 LLM 调用(分钟级),卸载到线程避免阻塞事件循环
         workflow = await anyio.to_thread.run_sync(
-            generator.generate_psop_workflow,
-            PreFlow.model_validate(request.preflow),
-            [Parse(json.dumps(card), AgentCard()) for card in request.agent_cards],
+            partial(generator.generate_psop_workflow,
+                    PreFlow.model_validate(request.preflow),
+                    [] if context else [Parse(json.dumps(card), AgentCard()) for card in request.agent_cards],
+                    **role_arguments(context)),
             abandon_on_cancel=False,
         )
         workflow.source = "solution_package"
+        await anyio.to_thread.run_sync(validate_before_save, workflow, context)
         SharedHandlers.save_psop().handle(workflow)
         logger.info(f"PSOP generated: id={workflow.id}, steps={len(workflow.steps)}")
-        # 回链:方案包 → 本次生成的工作流,方案包列表页据此展示 Workflow 入口
+        # 回链:方案包 → 本次生成的工作流,按 role/instance 绑定分槽保存,
+        # 方案包列表页据此展示两条互不覆盖的 Workflow 入口
         try:
-            solution_package_manager.link_workflow(preflow_name, workflow.id)
+            solution_package_manager.link_workflow(preflow_name, workflow.id, request.binding)
         except Exception as link_error:
             logger.warning(f"Failed to link workflow to solution package '{preflow_name}': {link_error}")
         audit_logger.audit({
@@ -755,6 +777,8 @@ async def generate_from_preflow(
         raise HTTPException(status_code=503, detail="Server is busy")
     except HTTPException:
         raise
+    except (RoleGenerationError, RoleGenerationServiceError) as error:
+        raise generation_http_exception(error) from error
     except WorkflowGeneratorError as e:
         # Business condition: the solution package references tasks no
         # registered agent can perform. 422 lets the UI show the unmatched
@@ -783,8 +807,9 @@ async def generate_from_intent(
         acquired = True
         logger.info("Generating PSOP from intent (length={})", len(request.user_intent))
 
-        agent_cards_raw = [MessageToDict(card, preserving_proto_field_name=False) for card in await get_agent_cards()]
-        if not agent_cards_raw:
+        context = await anyio.to_thread.run_sync(partial(prepare_generation, request, "internal_intent"))
+        agent_cards_raw = [] if context else [MessageToDict(card, preserving_proto_field_name=False) for card in await get_agent_cards()]
+        if context is None and not agent_cards_raw:
             raise HTTPException(status_code=404, detail="No available AgentCards found")
 
         generator = IntentPsopGenerator()
@@ -795,12 +820,15 @@ async def generate_from_intent(
                 user_intent=request.user_intent,
                 agent_cards=[Parse(json.dumps(agent), AgentCard()) for agent in agent_cards_raw],
                 workflow_name=request.workflow_name,
+                **role_arguments(context),
             ),
             abandon_on_cancel=False,
         )
         psop.source = "ai_intent"
         logger.info(f"PSOP generated from intent: id={psop.id}, steps={len(psop.steps)}")
 
+        # This check is outside the legacy non-fatal persistence block.
+        await anyio.to_thread.run_sync(validate_before_save, psop, context)
         try:
             SharedHandlers.save_psop().handle(psop)
             logger.info(f"PSOP auto-saved: {psop.id}")
@@ -832,6 +860,8 @@ async def generate_from_intent(
         raise HTTPException(status_code=503, detail="Server is busy")
     except HTTPException:
         raise
+    except (RoleGenerationError, RoleGenerationServiceError) as error:
+        raise generation_http_exception(error) from error
     except WorkflowGeneratorError as e:
         # Business condition: the intent's tasks cannot be matched to any
         # registered agent skill.

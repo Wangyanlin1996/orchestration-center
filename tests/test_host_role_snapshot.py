@@ -230,6 +230,50 @@ async def test_host_logs_verified_identity_on_acceptance_and_registry_rejection(
 
 
 @pytest.mark.asyncio
+async def test_expanded_candidate_envelope_reaches_engine_factory():
+    from host_agent.role_dispatch import TASK_T_URI
+    from test_role_contract_candidates import _add_extra_interfaces, _candidate
+
+    def mutate(card):
+        _add_extra_interfaces(card)
+        card["securitySchemes"] = {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}}
+        card["securityRequirements"] = [{"schemes": {"bearer": {"list": []}}}]
+        card["capabilities"] = {"extensions": [{"uri": TASK_T_URI, "required": True}]}
+
+    snapshot, live = _candidate(mutate)
+    metadata = {
+        "__orch_psop_id__": snapshot.template.id,
+        "__orch_psop__": snapshot.execution_psop.model_dump_json(),
+        **_role_dispatch_metadata(snapshot),
+    }
+    metadata[PROOF_KEY] = sign_dispatch(metadata, KEY, intent=INTENT)
+    host, queue = executor([live]), Queue()
+    host._engine_client_factory.create.return_value = StubWorkflowEngineClient()
+    host._credentials_config = {"Technical RAN A": {"bearer": {
+        "login_url": "http://127.0.0.1:9/login",
+        "request_fields": {"user": "u", "secret": "p"}}}}
+
+    class TaskTRoutingPolicy(RoutingPolicy):
+        async def on_task(self, request):
+            city = request.skill[-1].lower()
+            base = MessageContent.text(json.dumps(
+                {"tenant": "technical-demo", "site": f"city-{city}",
+                 "business_object": f"ran-{city}", "skill_id": f"explore-{city}"}))
+            return MessageContent(parts=base.parts,
+                                  metadata={TASK_T_URI: "task-t-payload"},
+                                  extensions={TASK_T_URI})
+
+    host._control_point_factory = lambda _: TaskTRoutingPolicy()
+    await host.execute(context(metadata), queue)
+    host._engine_client_factory.create.assert_called_once()
+    # The dispatch projection pins the multi-interface card to its endpoint.
+    projected = host._engine_client_factory.create.call_args.args[0]
+    assert [interface.url for interface in projected[0].supported_interfaces] == [
+        snapshot.cards[0].endpoint]
+    assert queue.events[-1].status.state == TaskState.TASK_STATE_COMPLETED
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["missing", "endpoint", "skill", "security", "extension", "duplicate"])
 async def test_registry_drift_rejected_before_transport(change):
     snapshot, metadata = envelope()
@@ -410,7 +454,8 @@ def serving(build_app):
 
 
 @pytest.mark.asyncio
-async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypatch, tmp_path):
+@pytest.mark.parametrize("generation", ["existing", "intent", "preflow"])
+async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypatch, tmp_path, generation):
     calls, host_cards, sdk_workflows, workers = [], [], [], {}
     records = []
     monkeypatch.setattr("orchestrate.handlers.dispatch.get_storage_handler",
@@ -466,6 +511,7 @@ async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypa
             description="Routing echo only", source=source, review_status="approved")])]))
         catalog_path.write_text(catalog.model_dump_json(), encoding="utf-8")
         monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path", lambda: str(catalog_path))
+        monkeypatch.setattr("orchestrate.core.role_generation.configured_catalog_path", lambda: str(catalog_path))
         monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path", lambda: str(registry_path))
         monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_authorized_instances",
                             lambda: ["technical-a", "technical-b"])
@@ -479,6 +525,28 @@ async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypa
                         if frame.startswith("data: ")]
 
             base_template, _, _ = prepared(port_a, port_b)
+            from orchestrate.core.catalog_gate import CatalogGate
+            from orchestrate.core.persistence import WorkflowStorage
+            store = WorkflowStorage(str(tmp_path / "generated-store"))
+            if generation != "existing":
+                from orchestrate.core.intent_psop_generator import IntentPsopGenerator
+                from orchestrate.core.psop_generator import PsopGenerator
+                from orchestrate.core.model.preflow import PreFlow
+                from orchestrate.core.role_generation import load_generation_context, validate_current_catalog
+                from tests.role_generation_helpers import JsonModel, structure_from_prompt
+
+                if generation == "intent":
+                    generator = IntentPsopGenerator.__new__(IntentPsopGenerator)
+                    generator._llm = JsonModel(base_template.model_dump(mode="json"))
+                    base_template = generator.generate_psop_from_intent(INTENT, [], binding="role")
+                else:
+                    generator = PsopGenerator.__new__(PsopGenerator)
+                    generator._llm = JsonModel(["Explore"], [dict(action_id="a1", role_id="test-optimizer",
+                        role_version="1", skill_id="explore")], structure_from_prompt)
+                    base_template = generator.generate_psop_workflow(PreFlow(name="Generated", steps_md="Explore"), [], binding="role")
+                validate_current_catalog(load_generation_context())
+            CatalogGate(SimpleNamespace(handle=store.save_psop)).handle(base_template)
+            base_template = store.load_psop(base_template.id)
             base_template_json = base_template.model_dump_json()
             for scenario in ("city-a", "city-b", "replacement", "mixed"):
                 city = "a" if scenario in {"city-a", "mixed"} else "b"
@@ -530,6 +598,7 @@ async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypa
                 assert template.model_dump_json() == original_template
             assert [city for city, _ in calls] == ["a", "b", "b", "a", "b"]
             assert base_template.model_dump_json() == base_template_json
+            assert store.load_psop(base_template.id).model_dump_json() == base_template_json
             changed = deepcopy(cards[0])
             changed.skills[0].name = "Changed after center freeze"
             host._agent_card_provider.load.return_value = [changed, cards[1]]
@@ -539,7 +608,7 @@ async def test_real_center_host_worker_chain_cross_site_and_replacement(monkeypa
             error = next(event["data"] for event in events if event["type"] == "error")
             assert error["code"] == "INSTANCE_SNAPSHOT_MISMATCH"
             assert error["reason"] == "REGISTRY_CARD_DRIFT"
-            assert error["task_ids"] == ["t1"]
+            assert error["task_ids"] == [base_template.steps[0].subtasks[0].task_id]
             assert error["instance_id"] == "technical-a"
             assert records[-1].execution_id == error["execution_id"]
             assert records[-1].status == ExecutionStatus.FAILED

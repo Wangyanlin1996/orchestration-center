@@ -37,6 +37,9 @@ class HostAgentConfig:
     registry_url: str
     ssl_verify: bool = False
     max_negotiation_exchanges: int = 3
+    # Header names the host accepts as authentication output from an
+    # injected AuthProvider, beyond what the card's schemes imply.
+    custom_auth_headers: tuple[str, ...] = ()
     role_dispatch_key: str = field(default_factory=lambda: os.environ.get("ORCH_ROLE_DISPATCH_KEY", ""), repr=False)
 
     def __post_init__(self) -> None:

@@ -23,6 +23,7 @@ import {
   defaultPort,
   defaultGateway,
   getAgentCards,
+  getRoleCatalog,
   getWorkflow,
   getWorkflowById,
   createWorkflow,
@@ -289,6 +290,25 @@ describe('api service', () => {
         expect.stringContaining('/rest/v1/orchestrate/generate-from-preflow'),
         { preflow, agent_cards: agentCards }
       );
+    });
+
+    it('sends role options without AgentCards and queries the exact catalog version', async () => {
+      const mockApi = axios.create();
+      mockApi.post.mockResolvedValue({ status: 'success', data: { id: 'wf' } });
+      mockApi.get.mockResolvedValue({ status: 'success', data: { catalog_version: 'v1', roles: [] } });
+      await handlePlan({ name: 'Input' }, undefined, { binding: 'role', catalog_version: 'v1', ignored: true });
+      expect(mockApi.post).toHaveBeenCalledWith(expect.stringContaining('/generate-from-preflow'), {
+        preflow: { name: 'Input' }, binding: 'role', catalog_version: 'v1',
+      });
+      await getRoleCatalog('v1');
+      expect(mockApi.get).toHaveBeenCalledWith(expect.stringContaining('/role-catalog'), { params: { catalog_version: 'v1' } });
+    });
+
+    it('preserves structured generation codes in resolved error envelopes', async () => {
+      const mockApi = axios.create();
+      mockApi.post.mockResolvedValue({ status: 'error', message: { code: 'INVALID_ROLE_SKILL', message: 'Unapproved reference' } });
+      await expect(generateWorkflowFromIntent('Analyze', undefined, { binding: 'role' }))
+        .rejects.toThrow('INVALID_ROLE_SKILL: Unapproved reference');
     });
 
     it('handlePlan should throw error when status is not success', async () => {

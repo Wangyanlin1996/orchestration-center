@@ -179,6 +179,32 @@ def _psop():
     )
 
 
+@pytest.mark.asyncio
+async def test_role_sandbox_rejected_before_scheduling_or_static_validation(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    from orchestrate.sandbox.service import SandboxService
+    from orchestrate.sandbox.store import SandboxStore
+
+    payload = _psop().model_dump(mode="json")
+    payload["catalog_version"] = "catalog-1"
+    payload["steps"][0]["subtasks"][0].update(binding="role", role_version="1")
+    psop = PSOP.model_validate(payload)
+    factory, validate = Mock(), Mock()
+    monkeypatch.setattr("orchestrate.sandbox.runner.validate_sandbox_static", validate)
+    service = SandboxService(factory, store=SandboxStore(tmp_path))
+    with pytest.raises(ValueError, match="ROLE_SANDBOX_NOT_SUPPORTED"):
+        await service.start(psop, [])
+    assert service._tasks == {}
+    assert service._status == {}
+    assert service._events == {}
+    factory.assert_not_called()
+
+    with pytest.raises(ValueError, match="ROLE_SANDBOX_NOT_SUPPORTED"):
+        await run_sandbox(psop, [], _SandboxControlPoint())
+    validate.assert_not_called()
+
+
 def _parallel_psop():
     return PSOP(
         name="parallel sandbox flow",

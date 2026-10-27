@@ -31,6 +31,7 @@ from orchestrate.sandbox.control_point import SandboxControlPoint
 from orchestrate.sandbox.models import StubScenario
 from orchestrate.sandbox.service import SandboxService
 from orchestrate.sandbox.store import SandboxStore
+from orchestrate.sandbox.validation import ROLE_SANDBOX_NOT_SUPPORTED, require_instance_workflow
 from orchestrate.server.middleware import RateLimiter
 from orchestrate.server.response_utils import created, get_agent_cards, ok
 from orchestrate.core.shared_handlers import SharedHandlers
@@ -70,6 +71,14 @@ async def start_sandbox_run(
             psop = SharedHandlers.retrieval().get_psop_by_id(workflow_id)
             if not psop:
                 raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+        try:
+            require_instance_workflow(psop)
+        except ValueError as exc:
+            logger.warning("[Sandbox] rejected workflow_id={} code={}", psop.id, ROLE_SANDBOX_NOT_SUPPORTED)
+            raise HTTPException(status_code=422, detail={
+                "code": ROLE_SANDBOX_NOT_SUPPORTED,
+                "message": "Role workflows are not supported by the instance sandbox",
+            }) from exc
         try:
             templates = sandbox_service.validate_templates(body.templates)
         except ValueError as exc:

@@ -18,12 +18,15 @@ import React, { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from "react-i18next";
 import DeleteConfirm from "@/components/common/pop_confirm/index.jsx";
 import { getAgentCards } from "@/service/api.js";
+import { hasRoleTasks } from '../rolePolicy.js';
 
-const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes, setEdges, isDark, onDelete, onClose }) => {
+const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes, setEdges, isDark, onDelete, onClose, readOnly = false }) => {
     const { t } = useTranslation();
     const [allAgents, setAllAgents] = React.useState([]);
+    const protectedWorkflow = readOnly || hasRoleTasks(nodes);
 
     useEffect(() => {
+        if (protectedWorkflow) return;
         const fetchAgents = async () => {
             try {
                 const res = await getAgentCards();
@@ -33,7 +36,7 @@ const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes,
             }
         };
         fetchAgents();
-    }, []);
+    }, [protectedWorkflow]);
     const theme = {
         container: isDark ? 'bg-zinc-950 text-zinc-300' : 'bg-white text-zinc-800',
         emptyBg: isDark ? 'bg-zinc-950' : 'bg-zinc-50/50',
@@ -52,7 +55,7 @@ const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes,
         }
     }, [selectedElement, nodes, edges]);
     const updateData = useCallback((key, value, extraProps = {}) => {
-        if (!selectedElement) return;
+        if (!selectedElement || protectedWorkflow) return;
 
         const isNode = !('source' in selectedElement);
 
@@ -79,7 +82,7 @@ const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes,
                 })
             );
         }
-    }, [selectedElement, setNodes, setEdges]);
+    }, [selectedElement, setNodes, setEdges, protectedWorkflow]);
 
     useEffect(() => {
         const d = activeElement?.data || {};
@@ -136,6 +139,7 @@ const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes,
     };
 
     const handleDelete = () => {
+        if (protectedWorkflow) return;
         onDelete();
     }
 
@@ -306,6 +310,28 @@ const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes,
         }
         return val;
     };
+    if (protectedWorkflow) {
+        return (
+            <div className={`p-4 space-y-4 overflow-auto ${theme.container}`}>
+                <button type="button" onClick={onClose}>{t('common.close')}</button>
+                <p role="note">{t('workflow.roleProtection')}</p>
+                <h3 className="font-bold">{data.label || activeElement.id}</h3>
+                {!isNode && <p>{data.condition || activeElement.label || '-'}</p>}
+                {(data.subtasks || []).map((task, index) => (
+                    <div key={task.task_id || index} className="border rounded-xl p-3 space-y-1">
+                        <p className="font-bold">{task.agent}</p>
+                        {task.roleName && <p>{task.roleName}</p>}
+                        <p>{task.skill}</p>
+                        {task.skillName && <p>{task.skillName}</p>}
+                        {task.binding === 'role' && <p>{t('workflow.roleIdentity')}: {task.role_version}</p>}
+                        {task.binding_group && <p>{task.binding_group}</p>}
+                        <p className="text-sm">{task.description}</p>
+                    </div>
+                ))}
+            </div>
+        );
+    }
+
     return (
         <div className={`flex flex-col h-full w-full transition-colors ${theme.container}`}>
             <div className={`flex flex-row items-center justify-between p-4 border-b transition-colors ${theme.header}`}>

@@ -43,6 +43,11 @@ from orchestrate.core.model.preflow import PreFlow
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.prompts import get_generate_psop_prompt, get_choose_skill_prompt, \
      get_preprocess_input_prompt
+from orchestrate.core.prompts import get_role_generation_prompt, get_role_action_match_prompt
+from orchestrate.core.role_generation import (
+    generation_context, ask_role_json, assemble_role_workflow, role_actions, match_role_actions,
+    generation_stage,
+)
 
 class WorkflowGeneratorError(Exception):
     """Custom exception for PSOP workflow generation failures.
@@ -192,7 +197,8 @@ class PsopGenerator:
     def generate_psop_workflow(
             self,
             preflow: PreFlow,
-            agent_cards: List[AgentCard]
+            agent_cards: List[AgentCard] | None = None,
+            *, binding: str = "instance", role_context=None,
     ) -> PSOP:
         """Generate complete PSOP workflow from PreFlow and agent cards.
 
@@ -214,6 +220,10 @@ class PsopGenerator:
         """
         if not preflow.steps_md or not preflow.steps_md.strip():
             raise WorkflowGeneratorError("Preflow steps_md cannot be empty")
+        context = generation_context(binding, role_context)
+        if context is not None:
+            with generation_stage(context, "generate_preflow"):
+                return self._generate_role_workflow(preflow, context)
         if not agent_cards:
             raise WorkflowGeneratorError("agent_cards cannot be empty")
 
@@ -285,6 +295,19 @@ class PsopGenerator:
         except Exception as e:
             logger.error(f"Unexpected error during PSOP generation: {e}")
             raise WorkflowGeneratorError(f"Unexpected error: {e}") from e
+
+    def _generate_role_workflow(self, preflow, context) -> PSOP:
+        extracted = ask_role_json(self._llm, get_preprocess_input_prompt(preflow.steps_md), context, "extract")
+        actions = role_actions(extracted)
+        matching = ask_role_json(self._llm, get_role_action_match_prompt(actions, context.projection()), context, "match")
+        tasks = match_role_actions(matching, actions, context)
+        prompt = get_role_generation_prompt(preflow.steps_md, context.projection(),
+                                            json.dumps(PSOP.model_json_schema()), tasks=tasks)
+        payload = ask_role_json(self._llm, prompt, context, "structure")
+        workflow = assemble_role_workflow(payload, context, expected_tasks=tasks)
+        workflow.name = preflow.name
+        workflow.related_preflow = preflow.id
+        return assemble_role_workflow(workflow.model_dump(mode="json"), context, expected_tasks=tasks)
 
     @staticmethod
     def _normalize_subtask_agents(psop: PSOP, skill_dict: Dict[str, str]) -> None:

@@ -133,9 +133,13 @@
     "filter_tags": "Tags",
     "summary_title": "Execution Summary",
     "summary_placeholder": "Summary content coming soon",
-    "summary_hint": "Waiting for backend API integration"
+    "summary_hint": "Waiting for backend API integration",
+    "roleResolution": "Role resolution"
   },
   "orchestration": {
+    "generationMode": "Generation mode",
+    "roleMode": "Role binding",
+    "instanceMode": "Instance binding",
     "title": "Orchestration",
     "list_label": "CORE O&M FLOWS",
     "method_import": "SolutionPackage Import",
@@ -369,11 +373,20 @@
       "title": "Confirm exit",
       "desc": "You have unsaved changes. Exiting will discard these changes. Are you sure?"
     },
-    "selfLoop": "Self-Process"
+    "selfLoop": "Self-Process",
+    "roleProtection": "This role workflow is protected. Task and connection editing is unavailable; name, description, tags and layout can be changed.",
+    "roleIdentity": "Role version",
+    "downloadDesign": "Download design JSON",
+    "catalogUnavailable": "The exact role catalog is unavailable. Original IDs and versions remain visible; saving and execution still require catalog validation.",
+    "resolvedInstance": "Resolved instance",
+    "roleSandboxUnsupported": "Role workflows require verified Host execution. The instance sandbox does not support them.",
+    "tagsLabel": "Tags",
+    "addTag": "Add tag",
+    "removeTag": "Remove tag"
   },
   "registry": {
     "title": "Registry center",
-"search_placeholder": "Search by agent name, capability or toolstack...",
+    "search_placeholder": "Search by agent name, capability or toolstack...",
     "units": "UNITS",
     "online": "online",
     "skills_count": "skills",
