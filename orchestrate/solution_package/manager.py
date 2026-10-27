@@ -118,6 +118,21 @@ class SolutionPackageManager:
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
 
+            # Re-parsing the same PDF replaces the chapter content, not the
+            # workflows already generated from an earlier parse; otherwise a
+            # parse that never reaches generation would silently drop links.
+            existing = None
+            if storage_path.exists():
+                try:
+                    with open(storage_path, 'r', encoding='utf-8') as f:
+                        existing = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Failed to read existing package for '{pdf_filename}': {e}")
+            if isinstance(existing, dict):
+                for link_key in ("workflow_id", "workflow_bindings"):
+                    if link_key in existing:
+                        storage_data[link_key] = existing[link_key]
+
             # Write JSON file
             with open(storage_path, 'w', encoding='utf-8') as f:
                 json.dump(storage_data, f, ensure_ascii=False, indent=2)
@@ -186,27 +201,41 @@ class SolutionPackageManager:
             logger.error(f"Failed to retrieve all solution packages: {e}")
             return []
 
-    def link_workflow(self, pdf_filename: str, workflow_id: str) -> bool:
+    def link_workflow(self, pdf_filename: str, workflow_id: str, binding: str = "instance") -> bool:
         """
         Record the workflow generated from this solution package.
+
+        Role-catalog and instance workflows occupy separate
+        ``workflow_bindings`` slots, so generating one never hides the other.
+        ``workflow_id`` keeps the most recently linked id for backward
+        compatibility with records and consumers predating the split.
 
         Args:
             pdf_filename: PDF filename the package was stored under
             workflow_id: Workflow id produced by generate-from-preflow
+            binding: Generation binding of the workflow ("role" or "instance")
 
         Returns:
             bool: Whether the link was recorded
         """
+        if binding not in ("role", "instance"):
+            logger.error(f"Unknown workflow binding '{binding}' for solution package '{pdf_filename}'")
+            return False
         try:
             data = self.retrieve_by_filename(pdf_filename)
             if data is None:
                 logger.warning(f"No solution package found for '{pdf_filename}' to link workflow '{workflow_id}'")
                 return False
             data["workflow_id"] = workflow_id
+            bindings = data.get("workflow_bindings")
+            if not isinstance(bindings, dict):
+                bindings = {}
+            bindings[binding] = workflow_id
+            data["workflow_bindings"] = bindings
             storage_path = self._get_storage_path(pdf_filename)
             with open(storage_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info(f"Linked workflow '{workflow_id}' to solution package '{pdf_filename}'")
+            logger.info(f"Linked {binding} workflow '{workflow_id}' to solution package '{pdf_filename}'")
             return True
         except Exception as e:
             logger.error(f"Failed to link workflow to '{pdf_filename}': {e}")

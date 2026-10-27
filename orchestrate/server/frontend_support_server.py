@@ -759,9 +759,10 @@ async def generate_from_preflow(
         await anyio.to_thread.run_sync(validate_before_save, workflow, context)
         SharedHandlers.save_psop().handle(workflow)
         logger.info(f"PSOP generated: id={workflow.id}, steps={len(workflow.steps)}")
-        # 回链:方案包 → 本次生成的工作流,方案包列表页据此展示 Workflow 入口
+        # 回链:方案包 → 本次生成的工作流,按 role/instance 绑定分槽保存,
+        # 方案包列表页据此展示两条互不覆盖的 Workflow 入口
         try:
-            solution_package_manager.link_workflow(preflow_name, workflow.id)
+            solution_package_manager.link_workflow(preflow_name, workflow.id, request.binding)
         except Exception as link_error:
             logger.warning(f"Failed to link workflow to solution package '{preflow_name}': {link_error}")
         audit_logger.audit({

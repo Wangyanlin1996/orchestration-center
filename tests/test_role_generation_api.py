@@ -195,6 +195,17 @@ def test_internal_role_preflow_accepts_absent_agent_cards(environment):
     registry.assert_not_awaited()
 
 
+def test_internal_preflow_links_workflow_under_its_binding_slot(environment):
+    """The package link must record the generation binding so role and
+    instance workflows of one package do not overwrite each other."""
+    client, _, model, registry, handler, _ = environment
+    model.responses = iter([["Analyze", "Analyze"], action_matches(), structure_from_prompt])
+    response = post_preflow(client, "internal", binding="role", catalog_version="generation-v1")
+    assert response.status_code == 200, response.text
+    server.solution_package_manager.link_workflow.assert_called_once_with(
+        "Input", response.json()["data"]["id"], "role")
+
+
 def test_read_only_catalog_requires_existing_account_authentication(environment):
     response = TestClient(server.app).get("/rest/v1/orchestrate/role-catalog")
     assert response.status_code == 401
