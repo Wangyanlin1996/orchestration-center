@@ -318,6 +318,21 @@ execution isolation, cancellation and mapping failures before dispatch.
 API transport verification and real A2A execution are tested separately; mocked
 API success does not certify business capability.
 
+Two standalone synthetic instances support manual inspection: run
+`python -m samples.role_pilot.technical_server` from the repository root; it
+listens on local ports 18991/18992 by default (`--port-a`/`--port-b` override),
+runs separately from `samples.start_agents_server`, and touches no registry, no
+LLM and no external network. technical-a (card `Technical RAN A`, skills
+`explore-a`/`Explore A`, scope `technical-demo/city-a/ran-a`) and technical-b
+(`city-b`/`ran-b`) route by scope and skill; POST to
+`http://127.0.0.1:18991/message:send` with `Content-Type: application/json` and
+`A2A-Version: 1.0`, parts text
+`{"tenant":"technical-demo","site":"city-a","business_object":"ran-a","skill_id":"explore-a"}`,
+and a completed task returns a JSON text artifact carrying instance_id,
+agent_name, scope, skill_id and technical_only; a scope or skill mismatch
+returns a failed task. The responses are routing evidence only, not real
+energy-saving assessment.
+
 Production admission, per-user object authorization, database-mode acceptance and
 business capability certification are outside this technical pilot. New
 authentication schemes beyond the credentials file and `AuthProvider` injection
