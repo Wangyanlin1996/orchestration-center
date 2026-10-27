@@ -138,8 +138,8 @@
   },
   "orchestration": {
     "generationMode": "Generation mode",
-    "roleMode": "Role catalog",
-    "instanceMode": "Instance compatibility",
+    "roleMode": "Role binding",
+    "instanceMode": "Instance binding",
     "title": "Orchestration",
     "list_label": "CORE O&M FLOWS",
     "method_import": "SolutionPackage Import",
