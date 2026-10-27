@@ -262,7 +262,8 @@ export async function matchWorkflowsTopN(intent, topN = 3) {
         name: item.name,
         description: item.description,
         tags: item.tags || [],
-        score: item.score
+        score: item.score,
+        binding: item.binding || null
     }));
 }
 

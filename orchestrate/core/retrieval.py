@@ -17,7 +17,7 @@
 
 import hashlib
 import json
-from datetime import timezone
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Optional, List
 
@@ -59,6 +59,15 @@ def _detect_intent_lang(text: str) -> Optional[str]:
         if "\u4e00" <= ch <= "\u9fff":
             return "Chinese"
     return "English"
+
+def _generation_sort_key(summary: WorkflowSearchResult):
+    """Total order for same-named generations: newest first, id as tiebreak."""
+    created = summary.created_at
+    if isinstance(created, datetime):
+        if not created.tzinfo:
+            created = created.replace(tzinfo=timezone.utc)
+        return (created.timestamp(), summary.workflow_id)
+    return (0.0, summary.workflow_id)
 
 class WorkflowRetrieval:
     def __init__(self, storage: WorkflowStorage, context=None):
@@ -198,8 +207,32 @@ class WorkflowRetrieval:
         results.sort(key=_sort_key, reverse=True)
         return results[offset:offset + limit]
 
+    @staticmethod
+    def _summary_binding(summary: WorkflowSearchResult) -> str:
+        """Binding of a search result; anything unknown projects as instance."""
+        binding = getattr(summary, "binding", None)
+        return binding if isinstance(binding, str) and binding in ("role", "instance") else "instance"
+
+    def _live_generations(self, summaries: List[WorkflowSearchResult]) -> List[WorkflowSearchResult]:
+        """Collapse summaries to the newest generation per (name, binding).
+
+        One solution package can generate role-based and instance-based
+        workflows that share the PSOP name, and regenerating a binding
+        leaves the superseded PSOPs in storage. Only the newest generation
+        of each (name, binding) pair is retrievable, so the LLM catalog never
+        offers stale duplicates and a matched name never hides the other
+        binding's workflow.
+        """
+        latest: dict = {}
+        for summary in summaries:
+            key = (summary.name, self._summary_binding(summary))
+            current = latest.get(key)
+            if current is None or _generation_sort_key(summary) > _generation_sort_key(current):
+                latest[key] = summary
+        return list(latest.values())
+
     def _retrieve_names_by_intent(self, user_intent: str, top_n: int = 1) -> List[str]:
-        summaries = self._list_psop_summaries()
+        summaries = self._live_generations(self._list_psop_summaries())
         if not summaries:
             return []
 
@@ -209,6 +242,7 @@ class WorkflowRetrieval:
             "tags": s.tags or [],
             "user_intent": s.user_intent or "",
             "tasks": s.tasks_summary or "",
+            "binding": self._summary_binding(s),
             "id": s.workflow_id
         } for s in summaries]
 
@@ -413,9 +447,14 @@ class WorkflowRetrieval:
             if not names:
                 return None
 
-            summaries = self._list_psop_summaries()
-            name_to_id = {s.name: s.workflow_id for s in summaries}
-            psop_id = name_to_id.get(names[0])
+            # A name may cover live role and instance generations of one
+            # package; the single-result contract keeps the newest of them.
+            latest_by_name: dict = {}
+            for summary in self._live_generations(self._list_psop_summaries()):
+                current = latest_by_name.get(summary.name)
+                if current is None or _generation_sort_key(summary) > _generation_sort_key(current):
+                    latest_by_name[summary.name] = summary
+            psop_id = latest_by_name[names[0]].workflow_id if names[0] in latest_by_name else None
             if psop_id:
                 return self._load_psop_by_id(psop_id)
             return None
@@ -433,8 +472,23 @@ class WorkflowRetrieval:
                 return vector_results[:top_n]
         try:
             names = self._retrieve_names_by_intent(user_intent, top_n)
-            name_to_summary = {s.name: s for s in self._list_psop_summaries()}
-            results = [name_to_summary[name] for name in names if name in name_to_summary]
+            # One matched name stands for every live binding of that name
+            # (role and instance generations of one package); duplicates the
+            # LLM repeats collapse through the id check instead of stacking
+            # identical results.
+            by_name: dict = {}
+            for summary in self._live_generations(self._list_psop_summaries()):
+                by_name.setdefault(summary.name, []).append(summary)
+            for variants in by_name.values():
+                variants.sort(key=_generation_sort_key, reverse=True)
+            results: List[WorkflowSearchResult] = []
+            seen = set()
+            for name in names:
+                for summary in by_name.get(name, []):
+                    if summary.workflow_id in seen:
+                        continue
+                    seen.add(summary.workflow_id)
+                    results.append(summary)
             logger.info(f"[Retrieval] TopN returned {len(results)} result(s) for intent")
             return results[:top_n]
         except Exception as e:

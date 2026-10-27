@@ -419,6 +419,27 @@ const LogEntry = React.memo(({ event, isDark, t, isSelected }) => {
     );
 });
 
+const bindingLabel = (binding, t) => (
+    binding === 'role' ? t('orchestration.roleMode') : binding === 'instance' ? t('orchestration.instanceMode') : null
+);
+
+// Role and instance generations of one package share name and description;
+// the binding badge is the only visible difference between their cards.
+const BindingBadge = React.memo(({ binding, t }) => {
+    const label = bindingLabel(binding, t);
+    if (!label) return null;
+    const isRole = binding === 'role';
+    return (
+        <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+            isRole
+                ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400'
+                : 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+        }`}>
+            {label}
+        </span>
+    );
+});
+
 const LEFT_PANEL_TABS = [
     { id: 'match', icon: Search, labelKey: 'execution.match_tab' },
     { id: 'history', icon: History, labelKey: 'execution.history_tab' },
@@ -843,7 +864,12 @@ const ExecutionCenter = ({ isDark }) => {
         setError(null);
 
         try {
-            const results = await matchWorkflowsTopN(userIntent, 3);
+            const raw = await matchWorkflowsTopN(userIntent, 3);
+            // Role and instance generations of one package arrive as distinct
+            // workflows; a repeated id would render two cards that share one
+            // workflow and could never be selected or started apart.
+            const seen = new Set();
+            const results = (raw || []).filter(wf => wf.workflow_id && !seen.has(wf.workflow_id) && seen.add(wf.workflow_id));
 
             if (results && results.length > 1) {
                 setWorkflowCandidates(results);
@@ -1440,6 +1466,7 @@ const ExecutionCenter = ({ isDark }) => {
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center gap-2 mb-1">
                                                     <span className="text-sm font-semibold text-zinc-900 dark:text-white truncate">{wf.name}</span>
+                                                    <BindingBadge binding={wf.binding} t={t} />
                                                 </div>
                                                 <p className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2 leading-relaxed">
                                                     {wf.description || t('execution.no_description')}
@@ -1847,6 +1874,7 @@ const ExecutionCenter = ({ isDark }) => {
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center gap-2 mb-1">
                                                     <h3 className="text-sm font-black dark:text-white truncate">{wf.name}</h3>
+                                                    <BindingBadge binding={wf.binding} t={t} />
                                                     {wf.score && (
                                                         <span className={`shrink-0 text-[10px] font-black px-2 py-0.5 rounded-full ${wf.score >= 0.8 ? 'bg-emerald-500/10 text-emerald-500' : wf.score >= 0.5 ? 'bg-amber-500/10 text-amber-500' : 'bg-zinc-500/10 text-zinc-500'}`}>
                                                             {Math.round(wf.score * 100)}%

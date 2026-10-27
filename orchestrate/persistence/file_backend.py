@@ -34,7 +34,7 @@ from orchestrate.core.model.execution_record import ExecutionRecord
 from orchestrate.core.model.preflow import PreFlow
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.persistence import WorkflowStorage
-from orchestrate.core.task_summary import build_tasks_summary
+from orchestrate.core.task_summary import build_tasks_summary, generation_binding
 from orchestrate.core.workflow_search_result import WorkflowSearchResult
 from orchestrate.persistence.contracts import (
     Capability,
@@ -72,6 +72,7 @@ class FilePsopRepository(PsopRepository):
                 user_intent=psop.user_intent,
                 related_preflow=psop.related_preflow,
                 tasks_summary=build_tasks_summary(psop),
+                binding=generation_binding(psop),
             ))
         return summaries
 
