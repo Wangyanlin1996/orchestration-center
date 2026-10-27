@@ -231,11 +231,14 @@ async def test_host_logs_verified_identity_on_acceptance_and_registry_rejection(
 
 @pytest.mark.asyncio
 async def test_expanded_candidate_envelope_reaches_engine_factory():
-    from test_role_contract_candidates import _candidate, _complete_auth_and_required_extension, _add_extra_interfaces
+    from host_agent.role_dispatch import TASK_T_URI
+    from test_role_contract_candidates import _add_extra_interfaces, _candidate
 
     def mutate(card):
         _add_extra_interfaces(card)
-        _complete_auth_and_required_extension(card)
+        card["securitySchemes"] = {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}}
+        card["securityRequirements"] = [{"schemes": {"bearer": {"list": []}}}]
+        card["capabilities"] = {"extensions": [{"uri": TASK_T_URI, "required": True}]}
 
     snapshot, live = _candidate(mutate)
     metadata = {
@@ -246,8 +249,27 @@ async def test_expanded_candidate_envelope_reaches_engine_factory():
     metadata[PROOF_KEY] = sign_dispatch(metadata, KEY, intent=INTENT)
     host, queue = executor([live]), Queue()
     host._engine_client_factory.create.return_value = StubWorkflowEngineClient()
+    host._credentials_config = {"Technical RAN A": {"bearer": {
+        "login_url": "http://127.0.0.1:9/login",
+        "request_fields": {"user": "u", "secret": "p"}}}}
+
+    class TaskTRoutingPolicy(RoutingPolicy):
+        async def on_task(self, request):
+            city = request.skill[-1].lower()
+            base = MessageContent.text(json.dumps(
+                {"tenant": "technical-demo", "site": f"city-{city}",
+                 "business_object": f"ran-{city}", "skill_id": f"explore-{city}"}))
+            return MessageContent(parts=base.parts,
+                                  metadata={TASK_T_URI: "task-t-payload"},
+                                  extensions={TASK_T_URI})
+
+    host._control_point_factory = lambda _: TaskTRoutingPolicy()
     await host.execute(context(metadata), queue)
     host._engine_client_factory.create.assert_called_once()
+    # The dispatch projection pins the multi-interface card to its endpoint.
+    projected = host._engine_client_factory.create.call_args.args[0]
+    assert [interface.url for interface in projected[0].supported_interfaces] == [
+        snapshot.cards[0].endpoint]
     assert queue.events[-1].status.state == TaskState.TASK_STATE_COMPLETED
 
 

@@ -57,6 +57,11 @@ from host_agent.execution import (
     host_event_state,
     host_final_state,
 )
+from host_agent.role_dispatch import (
+    RoleDispatchEngineClient,
+    ValidatingAuthProvider,
+    project_dispatch_interfaces,
+)
 from host_agent.role_execution import RoleExecutionBridge
 from host_agent.role_snapshot import read_role_snapshot, validated_agent_cards
 from host_agent.utils import detect_language
@@ -113,6 +118,7 @@ class HostAgentExecutor(AgentExecutor):
         workflow_repository: Any | None = None,
         agent_card_provider: AgentCardProvider | None = None,
         engine_client_factory: EngineClientFactory | None = None,
+        auth_provider: Any | None = None,
     ) -> None:
         if control_point_factory is None:
             raise ValueError("control_point_factory is required")
@@ -121,6 +127,8 @@ class HostAgentExecutor(AgentExecutor):
         self._config = config
         self._extension_lifecycle = extension_lifecycle
         self._control_point_factory = control_point_factory
+        self._credentials_config = credentials_config
+        self._auth_provider = auth_provider
         self._workflow_repository = workflow_repository or OrchestrationWorkflowRepository(
             orch_url=config.orchestration_url,
             ssl_verify=config.ssl_verify,
@@ -220,7 +228,28 @@ class HostAgentExecutor(AgentExecutor):
                     [binding.task_id for binding in role_snapshot.bindings],
                     [card.instance_id for card in role_snapshot.cards],
                 )
-            engine_client = self._engine_client_factory.create(agent_cards)
+            dispatch_cards = agent_cards
+            dispatch_provider = None
+            if role_snapshot is not None:
+                dispatch_cards = project_dispatch_interfaces(role_snapshot, agent_cards)
+                user_provider = getattr(self, "_auth_provider", None)
+                if user_provider is not None:
+                    dispatch_provider = ValidatingAuthProvider(
+                        user_provider,
+                        execution_id=role_snapshot.execution_id,
+                        custom_headers=getattr(self._config, "custom_auth_headers", ()),
+                        credentials=getattr(self, "_credentials_config", None),
+                    )
+            engine_client = self._engine_client_factory.create(
+                dispatch_cards,
+                **({"auth_provider": dispatch_provider} if dispatch_provider is not None else {}),
+            )
+            if role_snapshot is not None:
+                engine_client = RoleDispatchEngineClient(
+                    engine_client, role_context, role_snapshot,
+                    credentials=getattr(self, "_credentials_config", None),
+                    auth_provider=getattr(self, "_auth_provider", None),
+                )
             control_point = self._control_point_factory(ControlPointContext(
                 orchestration_url=self._config.orchestration_url,
                 ssl_verify=self._config.ssl_verify,
@@ -239,7 +268,7 @@ class HostAgentExecutor(AgentExecutor):
             execution_started = time.time()
             async for event in execute_psop(
                 psop=Workflow.from_dict(workflow) if role_snapshot is not None else workflow,
-                agent_cards=agent_cards,
+                agent_cards=dispatch_cards,
                 control_point=control_point,
                 engine_client=engine_client,
                 runtime_intent=processed_intent,

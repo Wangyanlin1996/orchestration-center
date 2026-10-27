@@ -107,12 +107,18 @@ creating transport. This default is unchanged. Upgrade both center and Host
 together before enabling the pilot. The bundled role catalog remains draft and
 does not authorize execution; tests use separate synthetic approved fixtures.
 
-Role candidates currently require a single HTTP+JSON HTTP(S) interface, no
-embedded URL credentials, no authentication declaration and no required
-extension. Unsupported candidates are excluded. Existing instance tasks retain
-their original SDK credential handling, including login and Bearer injection.
-Keep actual credentials in protected credential references, never in AgentCard
-descriptions, URLs, extension content, snapshots or source control.
+Role candidates may declare multiple interfaces, a complete authentication
+declaration and required extensions. The projection admits a candidate when
+its registry endpoint matches one declared HTTP+JSON interface, every
+declared interface URL is clean HTTP(S) without embedded credentials, and
+every security requirement references a scheme the card itself declares;
+requirements without matching schemes are excluded before selection. At
+dispatch the Host pins the SDK to the selected endpoint and enforces the
+extension and authentication policy described below. Existing instance tasks
+retain their original SDK credential handling, including login and Bearer
+injection. Keep actual credentials in protected credential references, never
+in AgentCard descriptions, URLs, extension content, snapshots or source
+control.
 
 ## Dispatch contract
 
@@ -146,6 +152,55 @@ its existing client factory. It never replaces a frozen selected card with a
 refreshed card. Status updates use a detached copy of the center's execution
 workflow. The SDK receives `Workflow.from_dict(...)`, which removes role-only
 authoring fields. Legacy execution remains on its existing path.
+
+For role executions the Host additionally derives a dispatch projection: each
+selected card is handed to the engine client with only the HTTP+JSON interface
+matching the registry endpoint, so the SDK's protocol-version-based interface
+selection cannot drift to another declared endpoint. The frozen snapshot,
+fingerprints and audit evidence keep every declared interface; the projection
+exists only on the dispatch path. Role-bound tasks then pass an extension
+four-check before dispatch: activated URIs must be declared by the card, must
+stay inside the supported set (Task-T only), required URIs must be activated,
+and an activated Task-T must carry its `metadata` payload. The same four-check
+runs on every negotiation reply content before the next request is sent, so a
+control point cannot widen the extension envelope mid-interaction; a rejected
+reply keeps the original task identity and flows through the SDK's
+cancellation cleanup. Authentication is checked the same way: an agent that
+declares schemes and requirements needs a credentials entry with a usable
+login configuration or an injected `AuthProvider`. Requirements are
+alternatives — one fully configured requirement satisfies the card, mirroring
+the SDK interceptor. One combination is explicitly unsupported: multiple
+schemes of the same requirement mapping to one case-insensitive
+authentication header name (directly or through configured `auth_header`
+values) are rejected up front with `AUTH_METHOD_UNSUPPORTED`, because the
+SDK resolves such a group only through runtime token values, so the
+requirement it adopts cannot be predicted. Supporting that combination
+would require case-insensitive handling at the actual header merge, which
+lives inside the SDK. `AuthProvider` output is verified only for role tasks
+that require authentication: every scheme of one requirement must contribute
+a non-empty, correctly formatted header (Bearer tokens in the
+`Authorization` convention, API keys in their declared header; header names
+and the Bearer prefix compare case-insensitively), or one of the alternative
+requirements must be satisfied, or the output must carry a host-configured
+custom header convention. The provider's output is also merged with
+case-insensitive semantics before it reaches the SDK's exact-key header
+merge: case-insensitive duplicates with equal values collapse into one
+entry, different values are rejected as `AUTH_HEADER_CONFLICT`, and
+scheme-derived names are rewritten to the effective spelling the
+credentials side writes. That spelling mirrors the requirement the SDK's
+credentials interceptor adopts — the first one whose every scheme carries
+a usable credentials configuration (a configured `auth_header` wins over
+the declared API key name over the `Authorization` convention); schemes
+in skipped, incomplete groups contribute nothing even when configured,
+and without an adoptable requirement the declared spellings apply. Equal
+values dedupe and conflicting values trip the SDK's own conflict rejection
+where the provider's headers meet the credentials-backed ones. Legacy
+instance tasks and auth-less role tasks keep
+the provider's existing semantics. Dispatch failures and rejected pre-checks
+surface as `ROLE_DISPATCH_FAILED` with an `error_details.reason`
+discriminator and the original execution, task and instance identity. Mapped
+legacy instance tasks inside mixed executions keep their existing dispatch
+behavior.
 
 ## Business policy context
 
@@ -207,6 +262,18 @@ Task mapping logs include both center and SDK IDs. Mapping failures preserve
 `INSTANCE_SNAPSHOT_MISMATCH` and `error_details.reason=SDK_TASK_MAPPING` in SDK
 task results.
 
+Dispatch-time failures use `ROLE_DISPATCH_FAILED` with an `error_details.reason`
+discriminator: `EXTENSION_UNKNOWN_ACTIVATED`, `EXTENSION_UNSUPPORTED`,
+`EXTENSION_NOT_ACTIVATED`, `EXTENSION_PAYLOAD_MISSING`,
+`AUTH_CREDENTIALS_MISSING`, `AUTH_METHOD_UNSUPPORTED`,
+`AUTH_PROVIDER_UNSATISFIED`, `AUTH_HEADER_CONFLICT` or
+`DISPATCH_FAILED` (login, token exchange and
+network failures are not subdivided by matching exception text). Details carry
+the execution ID plus the original task and instance identity; when a callback
+cannot be mapped, only the execution ID is reported. `error_type` records the
+exception class name; exception messages and authentication responses never
+enter errors or logs.
+
 Run the focused verification from the repository root:
 
 ```powershell
@@ -217,13 +284,42 @@ The tests start and stop real local Host and worker HTTP A2A services. They cove
 cross-site routing with an unchanged template, same-scope replacement, skill
 translation, mixed instance tasks, local SelfLoop, a real legacy login/Bearer
 exchange, registry drift rejection through SSE with failure recording, and
-authenticated request propagation through all three execution APIs. No LLM or
+authenticated request propagation through all three execution APIs. One closed
+loop dispatches the three expanded candidate types through real transports: an
+authenticated worker (real login exchange, Bearer header on every business
+request), a required Task-T worker (activated URI, metadata payload,
+`A2A-Extensions` header asserted at the worker) and a multi-interface worker
+whose registry-pinned endpoint receives every request while its higher-protocol
+sibling receives none. A center-chain closed loop drives the same candidates
+through the real orchestration-center path — catalog and registry files, live
+projection, dispatch SSE and execution records — with a legacy instance task
+mixed into the same execution, and a second chain asserts that a role
+candidate without credentials is rejected with `AUTH_CREDENTIALS_MISSING`,
+the original task identity and zero business requests. Unit coverage adds
+provider-output validation (non-empty values, Bearer format, case-insensitive
+header names, per-requirement combinations, custom conventions), the
+requirement-alternatives credentials pre-check, negotiation reply guards, and
+passthrough semantics for legacy and auth-less dispatches. Provider header
+merge closed loops assert that a credentials-versus-provider case conflict
+aborts the dispatch with zero business requests, that matching values
+deduplicate to a single wire header, and that a legitimate lowercase provider
+header still authenticates the request; further loops derive the effective
+header from a credentials `auth_header` configuration and from a configured
+scheme whose alternative declaration differs only by header-name case, each
+with a same-value single-header pass and a conflicting-value rejection, and
+from an incomplete AND group in front of a configured alternative — the
+skipped group's configuration must not impose its spelling on the scheme
+the SDK actually adopts — and from a requirement whose members share one
+case-insensitive header name, which is rejected structurally with zero
+logins and zero requests. No LLM or
 external registry is needed. Regression cases also cover PSOP string boundaries,
 identical concurrent tasks in AllSuccess/AnySuccess steps, event/callback order,
 execution isolation, cancellation and mapping failures before dispatch.
 API transport verification and real A2A execution are tested separately; mocked
 API success does not certify business capability.
 
-Production admission, per-user object authorization, multi-interface role cards,
-authenticated/required-extension role candidates, database-mode acceptance and
-business capability certification are outside this technical pilot.
+Production admission, per-user object authorization, database-mode acceptance and
+business capability certification are outside this technical pilot. New
+authentication schemes beyond the credentials file and `AuthProvider` injection
+(such as mTLS), and extensions beyond Task-T, are not part of the current
+supported set.
