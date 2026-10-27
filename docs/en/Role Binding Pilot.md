@@ -40,8 +40,8 @@ offers **Download design JSON**, which works without catalog access or saving.
 
 Both intent and PreFlow/SOP generation support `binding: "role"` and an optional
 `catalog_version`. Omitting `binding` in an API request preserves instance
-generation. The frontend generation selector defaults to role mode; users can
-explicitly select instance compatibility. The graph builder retains its existing
+generation. The frontend generation selector defaults to **Role binding**; users can
+explicitly select **Instance binding**. The graph builder retains its existing
 instance editing behavior. Existing workflows keep their original binding mode.
 
 Role generation does not load AgentCards or query the instance registry. It

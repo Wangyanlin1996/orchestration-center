@@ -138,8 +138,8 @@
   },
   "orchestration": {
     "generationMode": "生成模式",
-    "roleMode": "角色目录",
-    "instanceMode": "实例兼容",
+    "roleMode": "角色绑定",
+    "instanceMode": "实例绑定",
     "title": "编排中心",
     "list_label": "核心运维流",
     "method_import": "解决方案包导入",
