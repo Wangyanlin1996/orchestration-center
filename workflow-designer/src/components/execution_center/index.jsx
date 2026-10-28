@@ -47,13 +47,14 @@ import {
     FlaskConical,
 } from 'lucide-react';
 import { getWorkflow, getWorkflowById, getStartProcessStreamUrl, matchWorkflowsTopN, getExecutionRecords, getExecutionRecord, deleteExecutionRecord, getSandboxReports, getSandboxReport, deleteSandboxReport } from '@/service/api.js';
-import { getAgentCards, getDispatchStreamUrl } from '@/service/api.js';
+import { getAgentCards, getDispatchStreamUrl, previewRoleExecution } from '@/service/api.js';
 import { transformWorkflowToReactFlow } from '@/components/orchestration_center/workflow/utils/index.jsx';
 import UnifiedWorkflow from '../orchestration_center/workflow/index.jsx';
 import { annotateWorkflowErrors, formatWorkflowError } from './workflowErrors.js';
 import { projectRoleExecution, roleTemplateFromEvents } from './workflowProjection.js';
 import ExecutionStatistics from './execution_statistics/index.jsx';
 import ExecutionTimeline from './timeline/index.jsx';
+import RolePreviewPanel from './RolePreviewPanel.jsx';
 import { SandboxReportView } from '@/components/sandbox/SandboxDialog.jsx';
 import {
     getNegotiationPayload,
@@ -509,6 +510,51 @@ const ExecutionCenter = ({ isDark }) => {
     const [showSummary, setShowSummary] = useState(false);
     const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
 
+    // Role execution preview (REQ74): scope inputs + pre-execution arrangement
+    const [roleScope, setRoleScope] = useState({ tenant: '', site: '', business_object: '' });
+    const [rolePreview, setRolePreview] = useState(null);
+    const [rolePreviewStale, setRolePreviewStale] = useState(false);
+    const [isPreviewing, setIsPreviewing] = useState(false);
+    const [previewError, setPreviewError] = useState(null);
+
+    const clearRolePreview = useCallback(() => {
+        setRolePreview(null);
+        setRolePreviewStale(false);
+        setPreviewError(null);
+    }, []);
+
+    const handleRoleScopeChange = useCallback((field, value) => {
+        setRoleScope(prev => ({ ...prev, [field]: value }));
+        // Edited inputs invalidate the previous preview immediately, so a
+        // stale arrangement can never be confirmed for execution.
+        setRolePreviewStale(true);
+    }, []);
+
+    const handlePreviewRoleExecution = useCallback(async () => {
+        if (!selectedId || isPreviewing) return;
+        const parts = [roleScope.tenant, roleScope.site, roleScope.business_object]
+            .map(part => (part || '').trim()).filter(Boolean);
+        if (parts.length > 0 && parts.length < 3) {
+            setPreviewError(t('execution.scope_incomplete'));
+            return;
+        }
+        setIsPreviewing(true);
+        setPreviewError(null);
+        try {
+            const data = await previewRoleExecution({
+                psop_id: selectedId,
+                ...(parts.length === 3 ? { scope: parts.join('/') } : {}),
+            });
+            setRolePreview(data);
+            setRolePreviewStale(false);
+        } catch (err) {
+            console.error('Failed to preview role execution:', err);
+            setPreviewError(err?.message || err?.detail || t('execution.preview_failed'));
+        } finally {
+            setIsPreviewing(false);
+        }
+    }, [selectedId, roleScope, isPreviewing, t]);
+
     const loadSandboxRecords = useCallback(async () => {
         try {
             setIsLoadingRecords(true);
@@ -569,7 +615,8 @@ const ExecutionCenter = ({ isDark }) => {
         setWorkflowError(null);
         setNodes([]);
         setEdges([]);
-    }, []);
+        clearRolePreview();
+    }, [clearRolePreview]);
 
     // Fetch agent cards for dispatch dropdown
     useEffect(() => {
@@ -616,6 +663,7 @@ const ExecutionCenter = ({ isDark }) => {
         setMatchedWorkflows([]);
         setNodes([]);
         setEdges([]);
+        clearRolePreview();
 
         const url = getDispatchStreamUrl(userIntent, selectedAgent, i18n.language);
         const es = new EventSource(url, { withCredentials: true });
@@ -680,7 +728,7 @@ const ExecutionCenter = ({ isDark }) => {
         };
 
         setEventSource(es);
-    }, [userIntent, selectedAgent, eventSource, i18n.language]);
+    }, [userIntent, selectedAgent, eventSource, i18n.language, clearRolePreview]);
 
     // Update exact filter
     const updateFilter = useCallback((key, value) => {
@@ -862,6 +910,7 @@ const ExecutionCenter = ({ isDark }) => {
         setMatchedWorkflows([]);
         setWorkflowSource(null);
         setError(null);
+        clearRolePreview();
 
         try {
             const raw = await matchWorkflowsTopN(userIntent, 3);
@@ -898,7 +947,12 @@ const ExecutionCenter = ({ isDark }) => {
         setWorkflowError(null);
         setMatchedWorkflows(workflowCandidates);
         setWorkflowCandidates([]);
+        clearRolePreview();
     };
+
+    // ──── Role execution preview (REQ74) ────
+    const selectedWorkflow = matchedWorkflows.find(wf => wf.workflow_id === selectedId);
+    const isRoleWorkflow = selectedWorkflow?.binding === 'role';
 
     const loadHistoryRecords = useCallback(async () => {
         setIsLoadingRecords(true);
@@ -922,6 +976,7 @@ const ExecutionCenter = ({ isDark }) => {
                 setSelectedExecutionId(executionId);
                 setExecutionTemplate(roleTemplateFromEvents(record.events));
                 setPsopStatus(record.final_psop || null);
+                clearRolePreview();
                 const displayEvents = (record.events || []).filter(e => {
                     const t = e.type;
                     return t === 'step_start' || t === 'step_complete' ||
@@ -949,7 +1004,7 @@ const ExecutionCenter = ({ isDark }) => {
             console.error("Failed to load execution record detail:", err);
             setError(t('execution.load_history_failed'));
         }
-    }, [t]);
+    }, [t, clearRolePreview]);
 
     const handleDeleteRecord = useCallback(async () => {
         if (!recordToDelete) return;
@@ -1289,6 +1344,21 @@ const ExecutionCenter = ({ isDark }) => {
                 </div>
                 )}
 
+                {/* Role execution scope + arrangement preview (REQ74) */}
+                {searchMode === 'fuzzy' && isRoleWorkflow && !isSearchCollapsed && (
+                    <RolePreviewPanel
+                        theme={theme}
+                        t={t}
+                        preview={rolePreview}
+                        stale={rolePreviewStale}
+                        loading={isPreviewing}
+                        error={previewError}
+                        scope={roleScope}
+                        onScopeChange={handleRoleScopeChange}
+                        onPreview={handlePreviewRoleExecution}
+                    />
+                )}
+
                 {searchMode === 'exact' && showFilters && !isSearchCollapsed && (
                     <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-700 grid grid-cols-4 gap-4 animate-in slide-in-from-top duration-300">
                         <div>
@@ -1448,7 +1518,7 @@ const ExecutionCenter = ({ isDark }) => {
                                 matchedWorkflows.map(wf => (
                                     <div 
                                         key={wf.workflow_id}
-                                        onClick={() => { setSelectedId(wf.workflow_id); setWorkflowSource('retrieved'); setPsopStatus(null); setExecutionTemplate(null); setWorkflowError(null); }}
+                                        onClick={() => { setSelectedId(wf.workflow_id); setWorkflowSource('retrieved'); setPsopStatus(null); setExecutionTemplate(null); setWorkflowError(null); clearRolePreview(); }}
                                         className={`group relative p-4 rounded-xl border transition-all cursor-pointer
                                             ${selectedId === wf.workflow_id 
                                                 ? 'bg-blue-50 dark:bg-blue-950/20 border-blue-300 dark:border-blue-800 shadow-sm' 

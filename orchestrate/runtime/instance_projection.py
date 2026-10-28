@@ -14,6 +14,7 @@ network probes.
 """
 
 from typing import Literal, Optional
+from dataclasses import dataclass
 from uuid import uuid4
 
 from loguru import logger
@@ -226,18 +227,47 @@ def resolve_execution_plan(
             (CATALOG_VERSION_UNAVAILABLE).
         ValueError: the frozen envelope fails snapshot validation.
     """
-    from orchestrate.core.catalog_gate import (
-        configured_catalog_path, has_role_tasks, load_approved_catalog,
-    )
-    from orchestrate.core.model.card_snapshot import freeze_agent_card
     from orchestrate.core.model.role_execution_snapshot import freeze_role_execution
     from orchestrate.runtime.role_resolver import resolve_role_bindings
+
+    from orchestrate.core.catalog_gate import has_role_tasks
 
     if not has_role_tasks(psop):
         raise ResolutionError(
             "RESOLUTION_INPUT_INVALID",
             "resolve_execution_plan called for a workflow without role tasks",
         )
+    inputs = assemble_resolution_inputs(psop, request, agent_cards)
+    result = resolve_role_bindings(
+        psop, inputs.catalog, inputs.registry, inputs.observations, inputs.context, inputs.policy,
+    )
+    return freeze_resolution_snapshot(psop, result, inputs.cards_by_identity, uuid4().hex)
+
+
+@dataclass
+class ResolutionInputs:
+    """Trusted resolution inputs assembled once and shared by every path."""
+
+    catalog: object
+    registry: InstanceRegistry
+    observations: list
+    context: ResolutionContext
+    policy: ResolutionPolicy
+    cards_by_identity: dict
+
+
+def assemble_resolution_inputs(psop: PSOP, request: ResolutionRequest | None, agent_cards) -> ResolutionInputs:
+    """Load catalog, registry, identity, authorization and live card projections.
+
+    Shared by formal resolution and execution preview so both consume the
+    same trusted inputs. Raises ``RoleReferenceError`` when the approved
+    catalog release is unavailable and ``ResolutionError`` for invalid
+    inputs or an unconfigured/unloadable registry.
+    """
+    from orchestrate.core.catalog_gate import (
+        configured_catalog_path, load_approved_catalog,
+    )
+
     catalog = load_approved_catalog(
         configured_catalog_path(), psop.catalog_version,
         subject=f"role workflow id={psop.id} catalog_version={psop.catalog_version}",
@@ -264,11 +294,19 @@ def resolve_execution_plan(
         ) from error
     context, policy = build_context_and_policy(request)
     cards_by_identity = _cards_by_identity(agent_cards)
-    result = resolve_role_bindings(
-        psop, catalog, registry,
-        project_observations(registry, agent_cards, cards_by_identity),
-        context, policy,
+    observations = project_observations(registry, agent_cards, cards_by_identity)
+    return ResolutionInputs(
+        catalog=catalog, registry=registry, observations=observations,
+        context=context, policy=policy, cards_by_identity=cards_by_identity,
     )
+
+
+def freeze_resolution_snapshot(template: PSOP, result, cards_by_identity: dict,
+                               execution_id: str) -> RoleExecutionSnapshot:
+    """Freeze selected full cards into the dispatch envelope."""
+    from orchestrate.core.model.card_snapshot import freeze_agent_card
+    from orchestrate.core.model.role_execution_snapshot import freeze_role_execution
+
     frozen_cards = []
     frozen_ids = set()
     for binding in result.bindings:
@@ -286,4 +324,4 @@ def resolve_execution_plan(
             binding["instance_id"], binding["agent"], binding["endpoint"],
             _card_payload(card),
         ))
-    return freeze_role_execution(psop, result, frozen_cards, uuid4().hex)
+    return freeze_role_execution(template, result, frozen_cards, execution_id)

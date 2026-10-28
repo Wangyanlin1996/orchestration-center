@@ -43,7 +43,11 @@ def test_parse_scope_rejects_wrong_part_count():
     assert exc.value.code == "RESOLUTION_INPUT_INVALID"
 
 
-def test_build_context_requires_scope():
+def test_build_context_requires_scope(monkeypatch):
+    monkeypatch.setattr(
+        "orchestrate.runtime.instance_projection.configured_execution_scope",
+        lambda: None,
+    )
     with pytest.raises(ResolutionError) as exc:
         build_context_and_policy(ResolutionRequest())
     assert exc.value.code == "RESOLUTION_INPUT_INVALID"

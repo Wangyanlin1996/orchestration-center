@@ -212,6 +212,12 @@ export async function getRoleCatalog(catalogVersion) {
     }));
 }
 
+// 鈹€鈹€鈹€ Role Execution Preview (REQ74) 鈹€鈹€鈹€
+
+export async function previewRoleExecution(payload) {
+    return unwrapEnvelope(await api.post(`${ORCHESTRATE_BASE()}/role-execution/preview`, payload));
+}
+
 const generationOptions = ({ binding, catalog_version }) => ({
     ...(binding === undefined ? {} : { binding }),
     ...(catalog_version === undefined ? {} : { catalog_version }),

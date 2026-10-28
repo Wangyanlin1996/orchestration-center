@@ -65,6 +65,7 @@ from orchestrate.core.model.psop import PSOP
 from orchestrate.core.persistence import WorkflowStorageError
 from orchestrate.runtime.instance_projection import ResolutionRequest, bind_resolution_identity
 from orchestrate.server.external_api import router as external_router
+from orchestrate.server.role_execution_api import router as role_execution_router
 from orchestrate.server.account_api import router as account_router
 from orchestrate.server.account_auth import AccountLogin, authenticate_account, verify_access_password
 from orchestrate.server.sandbox_api import sandbox_router, sandbox_service
@@ -1349,6 +1350,7 @@ async def get_execution_record(execution_id: str):
 # ──── Register routers ────
 app.include_router(router)
 app.include_router(external_router)
+app.include_router(role_execution_router)
 app.include_router(account_router)
 app.include_router(sandbox_router, prefix="/rest/v1/orchestrate")
 
