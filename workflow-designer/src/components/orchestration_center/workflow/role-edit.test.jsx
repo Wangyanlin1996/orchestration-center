@@ -215,4 +215,23 @@ describe('save gate for invalid role references', () => {
         await click(button('common.confirm'));
         expect(createWorkflow).toHaveBeenCalledOnce();
     });
+
+    it('serializes role task content edits from the design-steps snapshot, not stale metadata', async () => {
+        const metadata = design();
+        metadata.steps[0].subtasks[1].skill = 'analyze';
+        const graph = transformWorkflowToReactFlow(metadata);
+        const editedSteps = JSON.parse(JSON.stringify(metadata.steps));
+        editedSteps[0].subtasks[0].description = 'Edited by the user';
+        await act(async () => root.render(<Toolbar {...graph} workflowId="wf" workflowName="Role flow"
+            workflowDescription="d" catalog={CATALOG} workflowMetadata={metadata}
+            designSteps={editedSteps} protectedWorkflow />));
+        await click(button('workflow.toolbar.export'));
+        await input(document.querySelector('input[placeholder="workflow.export.namePlaceholder"]'), 'Role flow');
+        await click(button('common.confirm'));
+        expect(createWorkflow).toHaveBeenCalledOnce();
+        const payload = createWorkflow.mock.calls[0][0];
+        expect(payload.steps[0].subtasks[0].description).toBe('Edited by the user');
+        // The untouched original metadata never leaks into the saved snapshot.
+        expect(metadata.steps[0].subtasks[0].description).toBe('Analyze');
+    });
 });

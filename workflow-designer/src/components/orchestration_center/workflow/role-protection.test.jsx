@@ -109,4 +109,19 @@ describe('role and mixed canvas protection', () => {
         await act(async () => capture.flow.onNodesChange(graph.nodes.map(node => ({ type: 'remove', id: node.id }))));
         expect(capture.flow.nodes.map(node => node.type)).toEqual(['startNode', 'endNode']);
     });
+
+    it('routes role task content edits into the design-steps snapshot used for saving', async () => {
+        const design = template('role');
+        const graph = transformWorkflowToReactFlow(design);
+        await act(async () => root.render(<UnifiedWorkflow mode="edit" visible importedNodes={graph.nodes}
+            importedEdges={graph.edges} workflowMetadata={design} workflowId="wf" />));
+        await act(async () => capture.flow.onSelectionChange({ nodes: [graph.nodes.find(node => node.id === 'role-step')], edges: [] }));
+        await act(async () => capture.panel.onRoleTaskContentChange('role-step', 0, { description: 'Edited by the user' }));
+        const steps = capture.toolbar.designSteps;
+        expect(steps[0].subtasks[0].description).toBe('Edited by the user');
+        expect(steps[0].subtasks[0].task_id).toBe('role-task');
+        // The original metadata stays untouched; only the snapshot moves.
+        expect(capture.toolbar.workflowMetadata).toBe(design);
+        expect(design.steps[0].subtasks[0].description).toBe('Analyze');
+    });
 });

@@ -431,6 +431,15 @@ const FlowInner = ({
     const [isDirty, setIsDirty] = useState(false);
     const [showExitConfirm, setShowExitConfirm] = useState(false);
     const [phenomenon, setPhenomenon] = useState('');
+    // Mutable copy of workflowMetadata.steps: the saved design snapshot for
+    // protected canvases. transformReactFlowToPSOP serializes this detached
+    // snapshot (never the canvas), so role task content edits must land here.
+    const [prevMetadata, setPrevMetadata] = useState(workflowMetadata);
+    const [designSteps, setDesignSteps] = useState(() => JSON.parse(JSON.stringify(workflowMetadata?.steps || [])));
+    if (prevMetadata !== workflowMetadata) {
+        setPrevMetadata(workflowMetadata);
+        setDesignSteps(JSON.parse(JSON.stringify(workflowMetadata?.steps || [])));
+    }
 
     useEffect(() => {
         if (mode === 'edit' && importedNodes?.length > 0) {
@@ -534,6 +543,7 @@ const FlowInner = ({
     // structure (task ids, steps, edges, groups) is never touched here.
     const handleRoleTaskContentChange = useCallback((nodeId, taskIndex, patch) => {
         if (!protectedWorkflow) return;
+        const taskId = editNodes.find(node => node.id === nodeId)?.data?.subtasks?.[taskIndex]?.task_id || null;
         setEditNodes(nds => nds.map(node => {
             if (node.id !== nodeId) return node;
             const subtasks = (node.data.subtasks || []).map((task, i) => (
@@ -541,8 +551,15 @@ const FlowInner = ({
             ));
             return { ...node, data: { ...node.data, subtasks } };
         }));
+        setDesignSteps(steps => steps.map(step => {
+            if (step.name !== nodeId) return step;
+            const subtasks = (step.subtasks || []).map((task, i) => (
+                (taskId ? task.task_id === taskId : i === taskIndex) ? { ...task, ...patch } : task
+            ));
+            return { ...step, subtasks };
+        }));
         setIsDirty(true);
-    }, [protectedWorkflow, setEditNodes]);
+    }, [protectedWorkflow, setEditNodes, editNodes, setDesignSteps]);
 
     const onDeleteSelected = useCallback(() => {
         if (!selectedElement || protectedWorkflow) return;
@@ -797,7 +814,7 @@ const FlowInner = ({
                 <>
                     <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
                         <div className="pointer-events-auto">
-                            <Toolbar isDark={isDark} nodes={editNodes} edges={editEdges} workflowId={workflowId} workflowName={workflowName} workflowDescription={workflowDescription} workflowMetadata={workflowMetadata} protectedWorkflow={protectedWorkflow} catalog={displayCatalog} onCancel={handleCancel} onClear={() => { if (protectedWorkflow) return; setEditNodes(initialEditNodes); setEditEdges([]); setIsDirty(true); }} onFitView={() => fitView({ padding: 0.4, duration: 800 })} onSaveSuccess={handleSaveSuccess} />
+                            <Toolbar isDark={isDark} nodes={editNodes} edges={editEdges} workflowId={workflowId} workflowName={workflowName} workflowDescription={workflowDescription} workflowMetadata={workflowMetadata} protectedWorkflow={protectedWorkflow} catalog={displayCatalog} designSteps={designSteps} onCancel={handleCancel} onClear={() => { if (protectedWorkflow) return; setEditNodes(initialEditNodes); setEditEdges([]); setIsDirty(true); }} onFitView={() => fitView({ padding: 0.4, duration: 800 })} onSaveSuccess={handleSaveSuccess} />
                         </div>
                     </div>
                     <div className="absolute left-1/2 -translate-x-1/2 bottom-8 h-auto z-40 pointer-events-none flex items-center min-h-0">

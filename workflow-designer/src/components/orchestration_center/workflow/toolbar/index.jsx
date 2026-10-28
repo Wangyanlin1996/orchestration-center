@@ -24,7 +24,7 @@ import SandboxDialog from "@/components/sandbox/SandboxDialog.jsx";
 import { hasRoleTasks, findInvalidRoleReferences } from '../rolePolicy.js';
 import { generationErrorMessage } from '../../generationErrors.js';
 
-const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, workflowMetadata = {}, protectedWorkflow = false, catalog = null, onCancel, onClear, onFitView, isDark, onSaveSuccess }) => {
+const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, workflowMetadata = {}, protectedWorkflow = false, catalog = null, designSteps = null, onCancel, onClear, onFitView, isDark, onSaveSuccess }) => {
     const roleWorkflow = protectedWorkflow || hasRoleTasks(workflowMetadata) || hasRoleTasks(nodes);
     const [showConfirm, setShowConfirm] = useState(false);
     const { t } = useTranslation();
@@ -97,6 +97,9 @@ const Toolbar = ({ nodes, edges, workflowId, workflowName, workflowDescription, 
 
     const serializeDesign = () => transformReactFlowToPSOP(nodes, edges, {
         ...workflowMetadata,
+        // Content edits live in the design-steps snapshot, not in the original
+        // metadata; without this the role branch would save stale content.
+        ...(roleWorkflow && Array.isArray(designSteps) && designSteps.length ? { steps: designSteps } : {}),
         description: exportDesc === '' && workflowMetadata.description === null ? null : exportDesc,
         id: workflowId || workflowMetadata.id,
         name: exportName || workflowName,
