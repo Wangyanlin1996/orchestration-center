@@ -48,6 +48,7 @@ import {
 } from 'lucide-react';
 import { getWorkflow, getWorkflowById, getStartProcessStreamUrl, matchWorkflowsTopN, getExecutionRecords, getExecutionRecord, deleteExecutionRecord, getSandboxReports, getSandboxReport, deleteSandboxReport } from '@/service/api.js';
 import { getAgentCards, getDispatchStreamUrl, previewRoleExecution } from '@/service/api.js';
+import { streamRoleExecution } from '@/service/roleStream.js';
 import { transformWorkflowToReactFlow } from '@/components/orchestration_center/workflow/utils/index.jsx';
 import UnifiedWorkflow from '../orchestration_center/workflow/index.jsx';
 import { annotateWorkflowErrors, formatWorkflowError } from './workflowErrors.js';
@@ -510,17 +511,74 @@ const ExecutionCenter = ({ isDark }) => {
     const [showSummary, setShowSummary] = useState(false);
     const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
 
+    // Shared SSE event state machine for every execution transport
+    // (EventSource GET streams and the confirmed POST stream). Returns true
+    // when the event ends the execution, so the caller can close its source.
+    const applyExecutionEvent = useCallback((data, { dispatch = false } = {}) => {
+        setEvents(prev => [...prev, data]);
+        switch (data.type) {
+            case 'start':
+                if (dispatch) {
+                    setAutoScroll(true);
+                    setSelectedId('dispatch');
+                    setWorkflowSource('retrieved');
+                    setMatchedWorkflows([{ workflow_id: 'dispatch', name: data.data?.workflow || 'Workflow', description: userIntent || '' }]);
+                }
+                break;
+            case 'resolution':
+                setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
+                break;
+            case 'psop_update':
+                try {
+                    const status = typeof data.data.psop === 'string'
+                        ? JSON.parse(data.data.psop)
+                        : data.data.psop;
+                    setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
+                    setPsopStatus(status);
+                } catch (e) {
+                    console.error('Failed to parse psop_update data:', e);
+                }
+                break;
+            case 'dispatch_result':
+            case 'complete':
+            case 'close':
+                setIsRunning(false);
+                setIsDispatching(false);
+                setRunningId(null);
+                return true;
+            case 'dispatch_error':
+            case 'error':
+                setWorkflowError(data.data || data);
+                setError(formatWorkflowError(data.data || data));
+                setIsRunning(false);
+                setIsDispatching(false);
+                setRunningId(null);
+                return true;
+            default:
+                break;
+        }
+        return false;
+    }, [userIntent]);
+
     // Role execution preview (REQ74): scope inputs + pre-execution arrangement
     const [roleScope, setRoleScope] = useState({ tenant: '', site: '', business_object: '' });
     const [rolePreview, setRolePreview] = useState(null);
     const [rolePreviewStale, setRolePreviewStale] = useState(false);
     const [isPreviewing, setIsPreviewing] = useState(false);
     const [previewError, setPreviewError] = useState(null);
+    // Manual re-selection from the preview panel; null means fully automatic.
+    const [roleOverrides, setRoleOverrides] = useState(null);
+    const [isConfirming, setIsConfirming] = useState(false);
+    const roleAbortRef = useRef(null);
 
     const clearRolePreview = useCallback(() => {
+        roleAbortRef.current?.abort();
+        roleAbortRef.current = null;
         setRolePreview(null);
         setRolePreviewStale(false);
         setPreviewError(null);
+        setRoleOverrides(null);
+        setIsConfirming(false);
     }, []);
 
     const handleRoleScopeChange = useCallback((field, value) => {
@@ -530,8 +588,8 @@ const ExecutionCenter = ({ isDark }) => {
         setRolePreviewStale(true);
     }, []);
 
-    const handlePreviewRoleExecution = useCallback(async () => {
-        if (!selectedId || isPreviewing) return;
+    const requestRolePreview = useCallback(async (overrides) => {
+        if (!selectedId) return;
         const parts = [roleScope.tenant, roleScope.site, roleScope.business_object]
             .map(part => (part || '').trim()).filter(Boolean);
         if (parts.length > 0 && parts.length < 3) {
@@ -544,6 +602,8 @@ const ExecutionCenter = ({ isDark }) => {
             const data = await previewRoleExecution({
                 psop_id: selectedId,
                 ...(parts.length === 3 ? { scope: parts.join('/') } : {}),
+                ...(overrides?.task_overrides ? { task_overrides: overrides.task_overrides } : {}),
+                ...(overrides?.group_overrides ? { group_overrides: overrides.group_overrides } : {}),
             });
             setRolePreview(data);
             setRolePreviewStale(false);
@@ -553,7 +613,104 @@ const ExecutionCenter = ({ isDark }) => {
         } finally {
             setIsPreviewing(false);
         }
-    }, [selectedId, roleScope, isPreviewing, t]);
+    }, [selectedId, roleScope, t]);
+
+    const handlePreviewRoleExecution = useCallback(() => {
+        requestRolePreview(roleOverrides);
+    }, [requestRolePreview, roleOverrides]);
+
+    const handleOverrideUnit = useCallback((unit, instanceId) => {
+        if (isPreviewing || isRunning) return;
+        const next = {
+            task_overrides: { ...(roleOverrides?.task_overrides || {}) },
+            group_overrides: { ...(roleOverrides?.group_overrides || {}) },
+        };
+        if (unit.binding_group) {
+            next.group_overrides[unit.binding_group] = instanceId;
+        } else if (unit.task_ids[0]) {
+            next.task_overrides[unit.task_ids[0]] = instanceId;
+        }
+        setRoleOverrides(next);
+        // The digest must cover the overrides, so the arrangement is
+        // re-previewed with them applied before it can be confirmed.
+        requestRolePreview(next);
+    }, [roleOverrides, isPreviewing, isRunning, requestRolePreview]);
+
+    const handleResetUnit = useCallback((unit) => {
+        if (isPreviewing || isRunning) return;
+        const next = {
+            task_overrides: { ...(roleOverrides?.task_overrides || {}) },
+            group_overrides: { ...(roleOverrides?.group_overrides || {}) },
+        };
+        if (unit.binding_group) {
+            delete next.group_overrides[unit.binding_group];
+        } else if (unit.task_ids[0]) {
+            delete next.task_overrides[unit.task_ids[0]];
+        }
+        const hasOverrides = Object.keys(next.task_overrides).length > 0
+            || Object.keys(next.group_overrides).length > 0;
+        setRoleOverrides(hasOverrides ? next : null);
+        requestRolePreview(hasOverrides ? next : null);
+    }, [roleOverrides, isPreviewing, isRunning, requestRolePreview]);
+
+    const canConfirmRoleExecution = Boolean(
+        selectedId
+        && rolePreview?.can_execute
+        && rolePreview?.resolution_fingerprint
+        && !rolePreviewStale
+        && !isPreviewing
+        && !isConfirming
+        && !isRunning
+    );
+
+    const handleConfirmRoleExecution = useCallback(() => {
+        if (!canConfirmRoleExecution) return;
+        const fingerprint = rolePreview.resolution_fingerprint;
+        const overrides = roleOverrides || { task_overrides: {}, group_overrides: {} };
+        const parts = [roleScope.tenant, roleScope.site, roleScope.business_object]
+            .map(part => (part || '').trim()).filter(Boolean);
+
+        setError(null);
+        setEvents([]);
+        setPsopStatus(null);
+        setExecutionTemplate(null);
+        setWorkflowError(null);
+        setNodes([]);
+        setEdges([]);
+        setIsRunning(true);
+        setRunningId(selectedId);
+        setAutoScroll(true);
+        setSelectedExecutionId(null);
+        setSelectedSandboxReport(null);
+        setIsConfirming(true);
+
+        const controller = new AbortController();
+        roleAbortRef.current = controller;
+        streamRoleExecution({
+            psop_id: selectedId,
+            ...(parts.length === 3 ? { scope: parts.join('/') } : {}),
+            task_overrides: overrides.task_overrides,
+            group_overrides: overrides.group_overrides,
+            confirm_fingerprint: fingerprint,
+            user_intent: userIntent || undefined,
+            lang: i18n.language || undefined,
+        }, {
+            onEvent: (data) => { applyExecutionEvent(data); },
+            onDone: () => setIsConfirming(false),
+            onError: (err) => {
+                console.error('Role execution failed:', err);
+                setIsConfirming(false);
+                setIsRunning(false);
+                setRunningId(null);
+                setError(err?.message || t('execution.confirm_failed'));
+            },
+        }, controller.signal).finally(() => {
+            if (roleAbortRef.current === controller) roleAbortRef.current = null;
+        });
+    }, [
+        canConfirmRoleExecution, rolePreview, roleOverrides, roleScope, selectedId,
+        userIntent, i18n.language, t, applyExecutionEvent,
+    ]);
 
     const loadSandboxRecords = useCallback(async () => {
         try {
@@ -671,47 +828,9 @@ const ExecutionCenter = ({ isDark }) => {
         es.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                setEvents(prev => [...prev, data]);
                 console.log('[SSE event]', data.type, data.data?.step || data.data?.agent || '', JSON.stringify(data.data).slice(0, 120));
-
-               switch (data.type) {
-                    case 'start':
-                        setAutoScroll(true);
-                        setSelectedId('dispatch');
-                        setWorkflowSource('retrieved');
-                        setMatchedWorkflows([{ workflow_id: 'dispatch', name: data.data?.workflow || 'Workflow', description: userIntent || '' }]);
-                        break;
-                    case 'resolution':
-                        setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
-                        break;
-                    case 'psop_update':
-                        try {
-                            const status = typeof data.data.psop === 'string'
-                                ? JSON.parse(data.data.psop)
-                                : data.data.psop;
-                            setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
-                            setPsopStatus(status);
-                        } catch (e) {
-                            console.error('Failed to parse psop_update data:', e);
-                        }
-                        break;
-                    case 'dispatch_result':
-                    case 'complete':
-                    case 'close':
-                        setIsRunning(false);
-                        setIsDispatching(false);
-                        setRunningId(null);
-                        es.close();
-                        break;
-                    case 'dispatch_error':
-                    case 'error':
-                        setWorkflowError(data.data || data);
-                        setError(formatWorkflowError(data.data || data));
-                        setIsRunning(false);
-                        setIsDispatching(false);
-                        setRunningId(null);
-                        es.close();
-                        break;
+                if (applyExecutionEvent(data, { dispatch: true })) {
+                    es.close();
                 }
             } catch (err) {
                 console.error("Failed to parse dispatch event data:", err);
@@ -728,7 +847,7 @@ const ExecutionCenter = ({ isDark }) => {
         };
 
         setEventSource(es);
-    }, [userIntent, selectedAgent, eventSource, i18n.language, clearRolePreview]);
+    }, [userIntent, selectedAgent, eventSource, i18n.language, clearRolePreview, applyExecutionEvent]);
 
     // Update exact filter
     const updateFilter = useCallback((key, value) => {
@@ -1066,7 +1185,10 @@ const ExecutionCenter = ({ isDark }) => {
             eventSource.close();
             setEventSource(null);
         }
+        roleAbortRef.current?.abort();
+        roleAbortRef.current = null;
         setIsRunning(false);
+        setIsConfirming(false);
         setRunningId(null);
     }, [eventSource]);
 
@@ -1099,37 +1221,8 @@ const ExecutionCenter = ({ isDark }) => {
         es.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                setEvents(prev => [...prev, data]);
-
-                switch (data.type) {
-                    case 'resolution':
-                        setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
-                        break;
-                    case 'psop_update':
-                        try {
-                            const status = typeof data.data.psop === 'string'
-                                ? JSON.parse(data.data.psop)
-                                : data.data.psop;
-                            setExecutionTemplate(previous => previous || roleTemplateFromEvents([data]));
-                            setPsopStatus(status);
-                        } catch (e) {
-                            console.error("Failed to parse psop_update data:", e);
-                        }
-                        break;
-                    case 'complete':
-                    case 'close':
-                        setIsRunning(false);
-                        setRunningId(null);
-                        es.close();
-                        break;
-                    case 'dispatch_error':
-                    case 'error':
-                        setWorkflowError(data.data || data);
-                        setError(formatWorkflowError(data.data || data));
-                        setIsRunning(false);
-                        setRunningId(null);
-                        es.close();
-                        break;
+                if (applyExecutionEvent(data)) {
+                    es.close();
                 }
             } catch (err) {
                 console.error("Failed to parse event data:", err);
@@ -1145,7 +1238,7 @@ const ExecutionCenter = ({ isDark }) => {
         };
 
         setEventSource(es);
-    }, [selectedId, userIntent, selectedAgent]);
+    }, [selectedId, userIntent, selectedAgent, i18n.language, eventSource, applyExecutionEvent]);
 
     useEffect(() => {
         return () => {
@@ -1356,6 +1449,12 @@ const ExecutionCenter = ({ isDark }) => {
                         scope={roleScope}
                         onScopeChange={handleRoleScopeChange}
                         onPreview={handlePreviewRoleExecution}
+                        overrides={roleOverrides}
+                        onOverrideUnit={handleOverrideUnit}
+                        onResetUnit={handleResetUnit}
+                        onConfirm={handleConfirmRoleExecution}
+                        canConfirm={canConfirmRoleExecution}
+                        confirming={isConfirming}
                     />
                 )}
 

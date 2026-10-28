@@ -59,7 +59,7 @@ export const getBaseUrl = () => {
 
 const ORCHESTRATE_BASE = () => `${getPortalAwareBaseUrl()}/rest/v1/orchestrate`;
 
-function getPortalAwareBaseUrl() {
+export function getPortalAwareBaseUrl() {
     // Portal plugin mode: ALWAYS use the gateway (relative path) regardless
     // of the serving port. The getBaseUrl() port heuristics (and any saved
     // direct-IP server config) describe the STANDALONE deployment; inside

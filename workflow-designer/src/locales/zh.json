@@ -157,6 +157,11 @@
     "preview_reason_highest_priority": "最高优先级",
     "preview_reason_tie_break": "同分决胜",
     "preview_reason_override": "手工指定",
+    "preview_override_hint": "点击候选实例可手工改选；改选后自动重新预览",
+    "preview_reset": "恢复自动",
+    "confirm_execute": "确认执行",
+    "confirming": "执行中...",
+    "confirm_failed": "确认执行失败",
     "scope_incomplete": "请完整填写租户/地点/业务对象，或全部留空使用服务器默认范围"
   },
   "orchestration": {

@@ -157,6 +157,11 @@
     "preview_reason_highest_priority": "Highest priority",
     "preview_reason_tie_break": "Tie-break",
     "preview_reason_override": "Manual override",
+    "preview_override_hint": "Click a candidate to re-select manually; the arrangement is re-previewed automatically",
+    "preview_reset": "Auto",
+    "confirm_execute": "Confirm & Execute",
+    "confirming": "Executing...",
+    "confirm_failed": "Confirmed execution failed",
     "scope_incomplete": "Fill tenant/site/business_object completely, or leave all empty for the server default"
   },
   "orchestration": {
