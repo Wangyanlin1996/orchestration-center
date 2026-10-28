@@ -40,6 +40,9 @@ class ResolutionRequest(BaseModel):
     task_overrides: dict[str, str] = Field(default_factory=dict)
     group_overrides: dict[str, str] = Field(default_factory=dict)
     tie_break: Optional[Literal["error", "instance_id"]] = None
+    # Confirmation digest from a preview; formal resolution refuses to
+    # dispatch when the re-read arrangement no longer matches it.
+    confirm_fingerprint: Optional[str] = Field(None, max_length=128)
 
 
 def bind_resolution_identity(resolution: ResolutionRequest, request) -> ResolutionRequest:
@@ -241,7 +244,31 @@ def resolve_execution_plan(
     result = resolve_role_bindings(
         psop, inputs.catalog, inputs.registry, inputs.observations, inputs.context, inputs.policy,
     )
-    return freeze_resolution_snapshot(psop, result, inputs.cards_by_identity, uuid4().hex)
+    snapshot = freeze_resolution_snapshot(psop, result, inputs.cards_by_identity, uuid4().hex)
+    _verify_confirmation(snapshot, inputs.policy, request)
+    return snapshot
+
+
+def _verify_confirmation(snapshot, policy, request: ResolutionRequest | None) -> None:
+    """Compare the freshly frozen arrangement with the previewed digest.
+
+    The digest is a consistency check, not an authorization token: a mismatch
+    means the workflow, catalog, scope, policy, chosen instances or cards
+    changed after the caller confirmed, so the execution is refused with
+    ``RESOLUTION_MISMATCH`` instead of silently dispatching other instances.
+    On a match the returned snapshot is the exact frozen envelope that is
+    dispatched -- it is never re-resolved.
+    """
+    if request is None or not request.confirm_fingerprint:
+        return
+    from orchestrate.core.model.role_execution_snapshot import resolution_fingerprint
+
+    actual = resolution_fingerprint(snapshot, policy)
+    if actual != request.confirm_fingerprint:
+        raise ResolutionError(
+            "RESOLUTION_MISMATCH",
+            "The confirmed arrangement has changed; preview again before executing",
+        )
 
 
 @dataclass

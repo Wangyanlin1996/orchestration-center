@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from orchestrate.core.model.execution_record import ExecutionStatus
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.shared_handlers import SharedHandlers
 from orchestrate.server.frontend_support_server import app
@@ -110,6 +111,9 @@ def cards(monkeypatch):
 
     monkeypatch.setattr("orchestrate.server.role_execution_api.get_agent_cards",
                         lambda: _async_done([pilot_card("a", 1)]))
+    # The legacy GET /execute route resolves its own imported symbol.
+    monkeypatch.setattr("orchestrate.server.frontend_support_server.get_agent_cards",
+                        lambda: _async_done([pilot_card("a", 1)]))
     return [pilot_card("a", 1)]
 
 
@@ -206,3 +210,134 @@ def test_preview_requires_an_authenticated_caller(monkeypatch, stored_psop, card
         response = anonymous.post(f"{BASE}/role-execution/preview",
                                   json={"psop_id": stored_psop.id, "scope": "t/city-a/b"})
     assert response.status_code == 401
+
+
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?# POST /role-execution/execute 鈥?confirmed dispatch (P2)
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+class _CapturingClient:
+    def __init__(self, contents):
+        self._contents = contents
+
+    async def stream_message(self, agent_name, content):
+        self._contents.append(content)
+        from workflow_engine import A2AStreamEvent
+        yield A2AStreamEvent(event_type="task", task_state="TASK_STATE_COMPLETED", metadata={})
+
+    async def close(self):
+        pass
+
+
+@pytest.fixture
+def fake_engine(monkeypatch):
+    contents = []
+
+    def _fake_client(self):
+        return _CapturingClient(contents)
+
+    monkeypatch.setenv("ORCH_ROLE_DISPATCH_KEY", "test-only-role-dispatch-key-32-bytes")
+    monkeypatch.setattr("orchestrate.runtime.exec_engine.OrchestrationEngine._get_engine_client",
+                        _fake_client)
+    return contents
+
+
+@pytest.fixture
+def saved_records(monkeypatch):
+    from common.custom.interface_type import InterfaceType
+
+    records = []
+
+    class _FakeHandler:
+        def handle(self, record):
+            records.append(record)
+            return record
+
+    monkeypatch.setattr("orchestrate.handlers.dispatch.get_storage_handler",
+                        lambda interface_type: _FakeHandler())
+    assert InterfaceType.SAVE_EXECUTION_RECORD is not None
+    return records
+
+
+def test_execute_without_confirmation_is_rejected(client, stored_psop, cards, resolution_inputs):
+    response = client.post(f"{BASE}/role-execution/execute",
+                           json={"psop_id": stored_psop.id, "scope": "t/city-a/b"})
+    assert response.status_code == 422
+
+
+def test_execute_confirmed_mismatch_fails_with_evidence(client, stored_psop, cards,
+                                                        resolution_inputs, saved_records):
+    response = client.post(f"{BASE}/role-execution/execute", json={
+        "psop_id": stored_psop.id, "scope": "t/city-a/b",
+        "task_overrides": {"t1": "inst-a"},
+        "confirm_fingerprint": "0" * 64,
+    })
+
+    assert response.status_code == 200
+    assert "RESOLUTION_MISMATCH" in response.text
+    assert len(saved_records) == 1
+    record = saved_records[0]
+    assert record.status == ExecutionStatus.FAILED
+    assert record.confirm_fingerprint == "0" * 64
+    assert record.overrides_applied["task_overrides"] == {"t1": "inst-a"}
+
+
+def test_execute_confirmed_dispatch_keeps_fingerprint(client, stored_psop, cards,
+                                                      resolution_inputs, fake_engine,
+                                                      saved_records):
+    preview = client.post(f"{BASE}/role-execution/preview",
+                          json={"psop_id": stored_psop.id, "scope": "t/city-a/b"}).json()["data"]
+    digest = preview["resolution_fingerprint"]
+
+    response = client.post(f"{BASE}/role-execution/execute", json={
+        "psop_id": stored_psop.id, "scope": "t/city-a/b",
+        "confirm_fingerprint": digest,
+    })
+
+    assert response.status_code == 200
+    events = [json.loads(line[len("data: "):]) for line in response.text.splitlines()
+              if line.startswith("data: ")]
+    assert any(event.get("type") == "resolution" for event in events)
+    assert len(saved_records) == 1
+    record = saved_records[0]
+    assert record.status == ExecutionStatus.SUCCESS
+    assert record.confirm_fingerprint == digest
+    assert record.overrides_applied is None
+    assert fake_engine, "dispatch payload captured"
+
+
+def test_legacy_get_execute_applies_override_query(client, stored_psop, cards,
+                                                   resolution_inputs, fake_engine,
+                                                   saved_records):
+    response = client.get(f"{BASE}/execute", params={
+        "psop_id": stored_psop.id, "scope": "t/city-a/b",
+        "task_overrides": json.dumps({"t1": "inst-a"}),
+        "tie_break": "instance_id",
+    })
+
+    assert response.status_code == 200
+    assert len(saved_records) == 1
+    record = saved_records[0]
+    assert record.status == ExecutionStatus.SUCCESS
+    assert record.overrides_applied == {
+        "task_overrides": {"t1": "inst-a"},
+        "group_overrides": {},
+        "tie_break": "instance_id",
+    }
+    assert record.confirm_fingerprint is None
+
+
+def test_legacy_get_execute_rejects_bad_override_json(client, stored_psop, cards,
+                                                      resolution_inputs):
+    response = client.get(f"{BASE}/execute", params={
+        "psop_id": stored_psop.id, "scope": "t/city-a/b",
+        "task_overrides": "{not-json",
+    })
+    assert response.status_code == 400
+
+
+def test_legacy_get_execute_rejects_bad_tie_break(client, stored_psop, cards,
+                                                  resolution_inputs):
+    response = client.get(f"{BASE}/execute", params={
+        "psop_id": stored_psop.id, "scope": "t/city-a/b",
+        "tie_break": "loudest",
+    })
+    assert response.status_code == 400

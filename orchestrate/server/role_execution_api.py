@@ -20,11 +20,14 @@ overrides and tie-break. The claimed ``caller_id`` of any request is never
 trusted; middleware-authenticated identity is bound instead.
 """
 
+import json
 from typing import Any, Literal, Optional
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from common.config import FLOW_CTL_PARALLEL_START_PROCESS_STREAM
 from common.util.config_util import get_conf
 from orchestrate.core.catalog_gate import has_role_tasks
 from orchestrate.core.shared_handlers import SharedHandlers
@@ -33,11 +36,15 @@ from orchestrate.runtime.instance_projection import ResolutionRequest, bind_reso
 from orchestrate.runtime.role_preview import build_role_preview
 from orchestrate.server.middleware import RateLimiter
 from orchestrate.server.response_utils import get_agent_cards, ok
+from orchestrate.server.sse_executor import dispatch_intent_sse
 from orchestrate.server.storage_error_response import storage_http_exception
 
 config = get_conf()
 
 router = APIRouter(prefix="/rest/v1/orchestrate")
+
+# Same dispatch slot budget as the legacy GET entries.
+execute_semaphore = anyio.Semaphore(int(config.get(FLOW_CTL_PARALLEL_START_PROCESS_STREAM, 10)))
 
 
 class RoleResolutionInputs(BaseModel):
@@ -63,6 +70,60 @@ class RolePreviewBody(RoleResolutionInputs):
                          description="Saved role workflow template to preview")
 
 
+class RoleExecuteBody(RolePreviewBody):
+    user_intent: Optional[str] = Field(None, max_length=8192,
+                                       description="Runtime intent for context injection")
+    target_agent: Optional[str] = Field(None, max_length=256,
+                                        description="Target host agent name; default is server config")
+    lang: Optional[str] = Field(None, max_length=8, description="Language hint (zh/en)")
+    confirm_fingerprint: str = Field(min_length=64, max_length=128,
+                                     description="Confirmation digest from a fresh preview")
+
+
+def _resolution_request_from(body: RoleResolutionInputs) -> ResolutionRequest:
+    return ResolutionRequest(
+        scope=body.scope,
+        authorized_instance_ids=body.authorized_instance_ids,
+        task_overrides=dict(body.task_overrides),
+        group_overrides=dict(body.group_overrides),
+        tie_break=body.tie_break,
+    )
+
+
+def _parse_overrides(raw: str | None, field: str) -> dict[str, str]:
+    """Decode a JSON object of ``task_id -> instance_id`` from a query param."""
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=400, detail=f"{field} must be a JSON object") from error
+    if not isinstance(value, dict) or not all(
+            isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
+        raise HTTPException(status_code=400, detail=f"{field} must map task or group ids to instance ids")
+    return value
+
+
+def resolution_request_from_query(
+    scope: str | None, authorized_instances: str | None, caller_id: str | None,
+    task_overrides: str | None, group_overrides: str | None, tie_break: str | None,
+) -> ResolutionRequest:
+    """Shared decoding for legacy GET execution entries (P2 compatibility)."""
+    if tie_break is not None and tie_break not in ("error", "instance_id"):
+        raise HTTPException(status_code=400, detail="tie_break must be 'error' or 'instance_id'")
+    return ResolutionRequest(
+        scope=scope,
+        authorized_instance_ids=(
+            [s.strip() for s in authorized_instances.split(",") if s.strip()]
+            if authorized_instances is not None else None
+        ),
+        caller_id=caller_id,
+        task_overrides=_parse_overrides(task_overrides, "task_overrides"),
+        group_overrides=_parse_overrides(group_overrides, "group_overrides"),
+        tie_break=tie_break,
+    )
+
+
 @router.post("/role-execution/preview")
 async def preview_role_execution(
     request: Request,
@@ -83,13 +144,7 @@ async def preview_role_execution(
         if not has_role_tasks(psop):
             raise HTTPException(status_code=422, detail="Workflow has no role tasks to preview")
 
-        resolution = ResolutionRequest(
-            scope=body.scope,
-            authorized_instance_ids=body.authorized_instance_ids,
-            task_overrides=dict(body.task_overrides),
-            group_overrides=dict(body.group_overrides),
-            tie_break=body.tie_break,
-        )
+        resolution = _resolution_request_from(body)
         bind_resolution_identity(resolution, request)
         try:
             cards = await get_agent_cards()
@@ -110,3 +165,47 @@ async def preview_role_execution(
 
         logger.error(f"Role execution preview failed: {e}")
         raise HTTPException(status_code=500, detail="Role execution preview failed") from e
+
+
+@router.post("/role-execution/execute")
+async def execute_role_execution(
+    request: Request,
+    body: RoleExecuteBody,
+    _: Any = Depends(RateLimiter(config, "start_process_stream")),
+):
+    """Execute a role workflow after a confirmed preview (SSE response).
+
+    The body carries the execution scope, manual overrides, the execution
+    intent/Host selection and the confirmation digest from a fresh preview.
+    Formal resolution re-reads every trusted input, freezes the arrangement
+    and refuses with ``RESOLUTION_MISMATCH`` when the digest no longer
+    matches -- before any transport is built. The response is the same SSE
+    event stream as the legacy GET entries.
+    """
+    from loguru import logger
+
+    try:
+        psop = SharedHandlers.retrieval().get_psop_by_id(body.psop_id)
+        if psop is None:
+            raise HTTPException(status_code=404, detail=f"Workflow {body.psop_id} not found")
+        if not has_role_tasks(psop):
+            raise HTTPException(status_code=422, detail="Workflow has no role tasks to execute")
+
+        resolution = _resolution_request_from(body)
+        resolution.confirm_fingerprint = body.confirm_fingerprint
+        bind_resolution_identity(resolution, request)
+        agent_cards = await get_agent_cards()
+        intent = body.user_intent or psop.name or psop.id
+        return await dispatch_intent_sse(
+            agent_cards, intent, target_agent=body.target_agent, lang=body.lang,
+            semaphore=execute_semaphore, psop=psop, resolution_request=resolution,
+        )
+    except anyio.WouldBlock:
+        raise HTTPException(status_code=503, detail="Server is busy")
+    except HTTPException:
+        raise
+    except StorageError as e:
+        raise storage_http_exception(e) from e
+    except Exception as e:
+        logger.error(f"Role execution failed: {e}")
+        raise HTTPException(status_code=500, detail="Role execution failed") from e

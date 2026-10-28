@@ -434,3 +434,70 @@ def test_conflicting_duplicate_cards_rejected():
     with pytest.raises(ResolutionError, match="Conflicting duplicate"):
         _cards_by_identity([first, second])
     assert len(_cards_by_identity([first, first])) == 1
+
+
+def _resolved_snapshot(monkeypatch, tmp_path, request, psop=None, cards=None):
+    monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path",
+                        lambda: _approved_catalog_file(tmp_path))
+    monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path",
+                        lambda: _registry_file(tmp_path))
+    return resolve_execution_plan(psop or _role_psop(), request,
+                                  cards if cards is not None else [pilot_card("a", 1), pilot_card("b", 2)])
+
+
+def test_confirmation_digest_mismatch_refuses_resolution(monkeypatch, tmp_path):
+    from orchestrate.core.model.role_execution_snapshot import resolution_fingerprint
+
+    request = ResolutionRequest(scope="t/s/b", authorized_instance_ids=["inst-a", "inst-b"])
+    snapshot = _resolved_snapshot(monkeypatch, tmp_path, request)
+    policy = build_context_and_policy(request)[1]
+    digest = resolution_fingerprint(snapshot, policy)
+
+    # A caller-authorized narrowing changes the confirmed context: refuse.
+    narrowed = ResolutionRequest(scope="t/s/b", authorized_instance_ids=["inst-a"],
+                                 confirm_fingerprint=digest)
+    with pytest.raises(ResolutionError) as exc:
+        _resolved_snapshot(monkeypatch, tmp_path, narrowed)
+    assert exc.value.code == "RESOLUTION_MISMATCH"
+
+
+def test_confirmation_digest_garbage_never_matches(monkeypatch, tmp_path):
+    request = ResolutionRequest(scope="t/s/b", confirm_fingerprint="0" * 64)
+    with pytest.raises(ResolutionError) as exc:
+        _resolved_snapshot(monkeypatch, tmp_path, request)
+    assert exc.value.code == "RESOLUTION_MISMATCH"
+
+
+def test_confirmation_digest_match_freezes_the_dispatched_arrangement(monkeypatch, tmp_path):
+    """On a matching digest the same frozen envelope flows on to dispatch."""
+    from orchestrate.core.model.role_execution_snapshot import resolution_fingerprint
+
+    # PSOP.created_at feeds the template fingerprint: the confirmed re-resolve
+    # must read the same stored workflow object, as production would.
+    psop = _role_psop()
+    request = ResolutionRequest(scope="t/s/b", authorized_instance_ids=["inst-a", "inst-b"])
+    snapshot = _resolved_snapshot(monkeypatch, tmp_path, request, psop=psop)
+    policy = build_context_and_policy(request)[1]
+    digest = resolution_fingerprint(snapshot, policy)
+
+    confirmed = ResolutionRequest(scope="t/s/b", authorized_instance_ids=["inst-a", "inst-b"],
+                                  confirm_fingerprint=digest)
+    again = _resolved_snapshot(monkeypatch, tmp_path, confirmed, psop=psop)
+    # A fresh official execution_id is allocated, but the arrangement is identical.
+    assert again.execution_id != snapshot.execution_id
+    assert resolution_fingerprint(again, build_context_and_policy(confirmed)[1]) == digest
+    assert [b.model_dump(mode="json") for b in again.bindings] == \
+        [b.model_dump(mode="json") for b in snapshot.bindings]
+
+
+def test_execution_record_accepts_confirmation_trace_fields():
+    record = ExecutionRecord(
+        psop_id="p1", psop_name="n", status=ExecutionStatus.FAILED,
+        confirm_fingerprint="a" * 64,
+        overrides_applied={"task_overrides": {"t1": "inst-b"}, "group_overrides": {},
+                           "tie_break": None},
+    )
+    assert record.confirm_fingerprint == "a" * 64
+    assert record.overrides_applied["task_overrides"] == {"t1": "inst-b"}
+    plain = ExecutionRecord(psop_id="p1", psop_name="n", status=ExecutionStatus.SUCCESS)
+    assert plain.confirm_fingerprint is None and plain.overrides_applied is None
