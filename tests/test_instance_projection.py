@@ -461,6 +461,37 @@ def test_confirmation_digest_mismatch_refuses_resolution(monkeypatch, tmp_path):
     assert exc.value.code == "RESOLUTION_MISMATCH"
 
 
+def test_confirmation_digest_covers_catalog_content(monkeypatch, tmp_path):
+    """A same-version catalog edit invalidates the confirmed arrangement (REQ74 F5)."""
+    from orchestrate.core.catalog_gate import load_approved_catalog
+    from orchestrate.core.model.role_execution_snapshot import content_digest, resolution_fingerprint
+
+    catalog_path = _approved_catalog_file(tmp_path)
+    monkeypatch.setattr("orchestrate.core.catalog_gate.configured_catalog_path", lambda: catalog_path)
+    monkeypatch.setattr("orchestrate.runtime.instance_projection.configured_registry_path",
+                        lambda: _registry_file(tmp_path))
+    request = ResolutionRequest(scope="t/s/b", authorized_instance_ids=["inst-a", "inst-b"])
+    snapshot = resolve_execution_plan(_role_psop(), request, [pilot_card("a", 1)])
+    assert snapshot.catalog_fingerprint == content_digest(
+        load_approved_catalog(catalog_path, snapshot.catalog_version, subject="test").model_dump(mode="json"))
+    digest = resolution_fingerprint(snapshot, build_context_and_policy(request)[1])
+
+    # Same version, same approval states, edited description of a referenced
+    # skill: the catalog content digest differs, so the old digest is refused.
+    data = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
+    for role in data["roles"]:
+        for skill in role["skills"]:
+            if skill["skill_id"] == "explore-energy-intent":
+                skill["description"] = "Edited routing evidence description"
+    Path(catalog_path).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    confirmed = ResolutionRequest(scope="t/s/b", authorized_instance_ids=["inst-a", "inst-b"],
+                                  confirm_fingerprint=digest)
+    with pytest.raises(ResolutionError) as exc:
+        resolve_execution_plan(_role_psop(), confirmed, [pilot_card("a", 1)])
+    assert exc.value.code == "RESOLUTION_MISMATCH"
+
+
 def test_confirmation_digest_garbage_never_matches(monkeypatch, tmp_path):
     request = ResolutionRequest(scope="t/s/b", confirm_fingerprint="0" * 64)
     with pytest.raises(ResolutionError) as exc:

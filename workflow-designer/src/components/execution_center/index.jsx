@@ -588,8 +588,9 @@ const ExecutionCenter = ({ isDark }) => {
         setRolePreviewStale(true);
     }, []);
 
-    const requestRolePreview = useCallback(async (overrides) => {
-        if (!selectedId) return;
+    const requestRolePreview = useCallback(async (overrides, explicitId) => {
+        const id = explicitId || selectedId;
+        if (!id) return;
         const parts = [roleScope.tenant, roleScope.site, roleScope.business_object]
             .map(part => (part || '').trim()).filter(Boolean);
         if (parts.length > 0 && parts.length < 3) {
@@ -600,7 +601,7 @@ const ExecutionCenter = ({ isDark }) => {
         setPreviewError(null);
         try {
             const data = await previewRoleExecution({
-                psop_id: selectedId,
+                psop_id: id,
                 ...(parts.length === 3 ? { scope: parts.join('/') } : {}),
                 ...(overrides?.task_overrides ? { task_overrides: overrides.task_overrides } : {}),
                 ...(overrides?.group_overrides ? { group_overrides: overrides.group_overrides } : {}),
@@ -915,7 +916,8 @@ const ExecutionCenter = ({ isDark }) => {
                     tags: item.tags || [],
                     description: item.description,
                     created_at: item.created_at,
-                    status: item.status || 'unknown'
+                    status: item.status || 'unknown',
+                    binding: item.binding
                 }));
 
                 // Apply filters
@@ -1204,6 +1206,20 @@ const ExecutionCenter = ({ isDark }) => {
         setRunningId(null);
     }, [eventSource]);
 
+    // Every page entry that starts a role workflow must enter the preview/
+    // confirm chain (REQ74): the legacy GET execution cannot carry the scope,
+    // manual re-selections or the confirmation digest.
+    const startRoleWorkflowFromList = useCallback((workflowId) => {
+        clearRolePreview();
+        setSelectedId(workflowId);
+        setWorkflowSource('retrieved');
+        setPsopStatus(null);
+        setExecutionTemplate(null);
+        setWorkflowError(null);
+        setIsSearchCollapsed(false);
+        requestRolePreview(null, workflowId);
+    }, [clearRolePreview, requestRolePreview]);
+
     // Start execution
     const startExecution = useCallback((overrideId) => {
         const idToRun = overrideId || selectedId;
@@ -1449,8 +1465,9 @@ const ExecutionCenter = ({ isDark }) => {
                 </div>
                 )}
 
-                {/* Role execution scope + arrangement preview (REQ74) */}
-                {searchMode === 'fuzzy' && isRoleWorkflow && !isSearchCollapsed && (
+                {/* Role execution scope + arrangement preview (REQ74); every
+                    search mode must reach the confirm chain for role flows. */}
+                {isRoleWorkflow && !isSearchCollapsed && (
                     <RolePreviewPanel
                         theme={theme}
                         t={t}
@@ -1667,6 +1684,8 @@ const ExecutionCenter = ({ isDark }) => {
                                                     stopExecution();
                                                 } else if (wf.workflow_id === 'dispatch') {
                                                     handleDispatch();
+                                                } else if (wf.binding === 'role') {
+                                                    startRoleWorkflowFromList(wf.workflow_id);
                                                 } else {
                                                     setSelectedId(wf.workflow_id);
                                                     startExecution(wf.workflow_id);

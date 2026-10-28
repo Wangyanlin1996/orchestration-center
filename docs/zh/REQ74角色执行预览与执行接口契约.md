@@ -79,11 +79,16 @@
 
 无需 `confirm_fingerprint`——legacy 条目保持既有行为，交互式确认仅约束新的 POST 执行入口。
 
+### GET /rest/v1/orchestrate/role-catalog（目录展示/编辑投影）
+
+返回 `RoleGenerationContext.projection()`：**只包含已批准条目的投影**，角色与技能均不携带 `review_status` 字段。因此前端编辑器的审批判定以成员资格为准——出现在投影中即代表该 `role_id@role_version#skill_id` 三元组已获批准；显式 `review_status: "draft"` 的条目（仅存在于原始目录发布文件）永不授权。保存合法性仍以后端 CatalogGate 读取原始目录为准。
+
 ## resolution_fingerprint 语义
 
 - 定义在 `orchestrate/core/model/role_execution_snapshot.py`：对快照 dump（去掉 `execution_id` / `fingerprint` 字段）加策略 dump 做确定性序列化后取 SHA-256，`authorized_instance_ids` 排序后参与。
+- 快照携带 `catalog_fingerprint`：执行/预览所加载目录发布内容的 SHA-256。目录版本不变但内容变化（如技能描述修订）同样改变摘要。
 - `PSOP.created_at` 属于模板指纹：同一模板内容不同保存时间的指纹不同，测试需复用同一 PSOP 对象。
-- 确认流程：预览 → 用户确认（可先改选并重新预览）→ 携带摘要执行 → 服务端重放规则并比对摘要。预览与执行之间任何可信输入变化（目录、注册表、模板内容、授权集、改选）都会改变摘要并触发 `RESOLUTION_MISMATCH`。
+- 确认流程：预览 → 用户确认（可先改选并重新预览）→ 携带摘要执行 → 服务端重放规则并比对摘要。预览与执行之间任何可信输入变化（目录内容、目录、注册表、模板内容、授权集、改选）都会改变摘要并触发 `RESOLUTION_MISMATCH`。
 
 ## 部署准入门禁（P4）
 

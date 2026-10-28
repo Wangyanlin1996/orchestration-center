@@ -56,6 +56,14 @@ const CATALOG = {
     ],
 };
 
+// Exact shape of GET /rest/v1/orchestrate/role-catalog: approved-only
+// projection, no review_status field on roles or skills.
+const PROJECTION = {
+    catalog_version: 'v1',
+    roles: [{ role_id: 'role-a', role_version: '1', name: 'Role A', description: 'd',
+        skills: [{ skill_id: 'analyze', name: 'Analyze', description: 'd' }] }],
+};
+
 const graph = () => ({
     nodes: [
         { id: 'start', type: 'startNode', data: {} },
@@ -83,6 +91,12 @@ describe('role catalog advisory validation', () => {
         expect(isApprovedRoleSkill(CATALOG, 'role-a', '1', 'draft-skill')).toBe(false);
         expect(isApprovedRoleSkill(CATALOG, 'role-b', '2', 'analyze')).toBe(false);
         expect(isApprovedRoleSkill(null, 'role-a', '1', 'analyze')).toBe(false);
+    });
+
+    it('accepts the served approved-only projection, which carries no review_status', () => {
+        expect(approvedRoleSkills(PROJECTION)).toEqual(new Set(['role-a@1#analyze']));
+        expect(isApprovedRoleSkill(PROJECTION, 'role-a', '1', 'analyze')).toBe(true);
+        expect(findInvalidRoleReferences(graph().nodes, PROJECTION).map(issue => issue.task_id)).toEqual(['t2']);
     });
 
     it('locates invalid references per node and task without a frontend verdict on missing catalog', () => {
@@ -149,6 +163,20 @@ describe('role task content editing in the property panel', () => {
         expect(container.querySelector('input,select')).toBeNull();
         expect(onRoleTaskContentChange).not.toHaveBeenCalled();
         expect(container.textContent).toContain('workflow.roleEditUnavailable');
+    });
+
+    it('offers role and skill selections for the real catalog projection shape', async () => {
+        await renderPanel(PROJECTION);
+        const card = container.querySelector('[data-testid="role-task-card"]');
+        const roleOptions = [...card.querySelectorAll('[data-testid="role-task-role"] option')]
+            .map(option => option.value);
+        expect(roleOptions).toContain('role-a@1');
+        const skillOptions = [...card.querySelectorAll('[data-testid="role-task-skill"] option')]
+            .map(option => option.value);
+        expect(skillOptions).toContain('analyze');
+        // The served projection holds only approved entries: no invalid flag.
+        expect([...document.querySelectorAll('[role="alert"]')].map(alert => alert.textContent))
+            .not.toContain(expect.stringContaining('workflow.roleEditInvalidReference'));
     });
 });
 

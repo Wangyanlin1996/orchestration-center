@@ -235,7 +235,7 @@ const RolePreviewPanel = memo(({
                             t={t}
                             onOverrideUnit={onOverrideUnit}
                             onResetUnit={onResetUnit}
-                            disabled={loading || confirming || !preview.can_execute}
+                            disabled={loading || confirming}
                         />
                     ))}
                 </div>

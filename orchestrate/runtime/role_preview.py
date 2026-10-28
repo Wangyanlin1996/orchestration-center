@@ -233,7 +233,8 @@ def build_role_preview(psop: PSOP, request: ResolutionRequest | None, agent_card
             # one is needed only to satisfy the envelope, and is excluded
             # from the confirmation digest.
             snapshot = freeze_resolution_snapshot(
-                psop, result, inputs.cards_by_identity, uuid4().hex)
+                psop, result, inputs.cards_by_identity, uuid4().hex,
+                catalog_fingerprint=inputs.catalog_fingerprint)
             fingerprint = resolution_fingerprint(snapshot, policy)
             versions = dict(catalog_version=result.catalog_version,
                             config_version=result.config_version,

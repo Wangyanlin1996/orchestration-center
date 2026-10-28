@@ -235,3 +235,20 @@ async def test_host_runtime_refuses_role_dispatch_on_closed_deployment(monkeypat
     error_events = [event for event in events
                     if "ROLE_EXECUTION_NOT_ADMITTED" in str(getattr(event, "metadata", {}))]
     assert error_events, "the refusal must surface as an error task update"
+
+
+def test_sample_composition_honors_deployment_admission_config(monkeypatch):
+    """The real sample composition passes server.conf admission keys through (REQ74 F3)."""
+    from samples.spn_host_agent.bootstrap import create_spn_host_executor
+
+    monkeypatch.setattr(HostAgentConfig, "role_execution_admitted", _REAL_HOST_ADMITTED)
+    monkeypatch.setattr("samples.spn_host_agent.bootstrap.get_conf",
+                        lambda: {"role_execution_mode": "pilot",
+                                 "deployment_environment": "technical_pilot"})
+    config = create_spn_host_executor([])._config
+    assert (config.role_execution_mode, config.deployment_environment) == ("pilot", "technical_pilot")
+    assert config.role_execution_admitted() == (True, [])
+
+    monkeypatch.setattr("samples.spn_host_agent.bootstrap.get_conf", lambda: {})
+    closed = create_spn_host_executor([])._config
+    assert closed.role_execution_admitted() == (False, ["MODE_DISABLED"])

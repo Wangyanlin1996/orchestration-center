@@ -9,6 +9,17 @@ export const hasRoleTasks = (workflowOrNodes) => {
 };
 
 /**
+ * One entry is acceptable when it is explicitly approved or carries no
+ * review_status at all: the /role-catalog endpoint serves an approved-only
+ * projection whose entries have no review_status field, while a raw catalog
+ * release marks drafts explicitly. Drafts never authorize. The backend
+ * CatalogGate stays the final authority.
+ */
+export const isApprovedEntry = (entry) => (
+    entry.review_status === undefined || entry.review_status === 'approved'
+);
+
+/**
  * Approved (role_id@role_version#skill_id) triples of one exact catalog
  * release. Drafts never authorize. Returns null when the catalog release is
  * unavailable, in which case the frontend cannot pre-check and the backend
@@ -18,9 +29,9 @@ export const approvedRoleSkills = (catalog) => {
     if (!catalog) return null;
     const approved = new Set();
     for (const role of catalog.roles || []) {
-        if (role.review_status !== 'approved') continue;
+        if (!isApprovedEntry(role)) continue;
         for (const skill of role.skills || []) {
-            if (skill.review_status === 'approved') {
+            if (isApprovedEntry(skill)) {
                 approved.add(`${role.role_id}@${role.role_version}#${skill.skill_id}`);
             }
         }

@@ -253,7 +253,10 @@ def resolve_execution_plan(
     result = resolve_role_bindings(
         psop, inputs.catalog, inputs.registry, inputs.observations, inputs.context, inputs.policy,
     )
-    snapshot = freeze_resolution_snapshot(psop, result, inputs.cards_by_identity, uuid4().hex)
+    snapshot = freeze_resolution_snapshot(
+        psop, result, inputs.cards_by_identity, uuid4().hex,
+        catalog_fingerprint=inputs.catalog_fingerprint,
+    )
     _verify_confirmation(snapshot, inputs.policy, request)
     return snapshot
 
@@ -290,6 +293,7 @@ class ResolutionInputs:
     context: ResolutionContext
     policy: ResolutionPolicy
     cards_by_identity: dict
+    catalog_fingerprint: str
 
 
 def assemble_resolution_inputs(psop: PSOP, request: ResolutionRequest | None, agent_cards) -> ResolutionInputs:
@@ -308,6 +312,11 @@ def assemble_resolution_inputs(psop: PSOP, request: ResolutionRequest | None, ag
         configured_catalog_path(), psop.catalog_version,
         subject=f"role workflow id={psop.id} catalog_version={psop.catalog_version}",
     )
+    # Content digest of the exact release: a same-version catalog edit must
+    # invalidate the arrangement (REQ74 P5 confirmation-digest guarantee).
+    from orchestrate.core.model.role_execution_snapshot import content_digest
+
+    catalog_fingerprint = content_digest(catalog.model_dump(mode="json"))
     registry_path = configured_registry_path()
     if not registry_path:
         logger.warning(
@@ -334,11 +343,12 @@ def assemble_resolution_inputs(psop: PSOP, request: ResolutionRequest | None, ag
     return ResolutionInputs(
         catalog=catalog, registry=registry, observations=observations,
         context=context, policy=policy, cards_by_identity=cards_by_identity,
+        catalog_fingerprint=catalog_fingerprint,
     )
 
 
 def freeze_resolution_snapshot(template: PSOP, result, cards_by_identity: dict,
-                               execution_id: str) -> RoleExecutionSnapshot:
+                               execution_id: str, *, catalog_fingerprint: str) -> RoleExecutionSnapshot:
     """Freeze selected full cards into the dispatch envelope."""
     from orchestrate.core.model.card_snapshot import freeze_agent_card
     from orchestrate.core.model.role_execution_snapshot import freeze_role_execution
@@ -360,4 +370,5 @@ def freeze_resolution_snapshot(template: PSOP, result, cards_by_identity: dict,
             binding["instance_id"], binding["agent"], binding["endpoint"],
             _card_payload(card),
         ))
-    return freeze_role_execution(template, result, frozen_cards, execution_id)
+    return freeze_role_execution(template, result, frozen_cards, execution_id,
+                                 catalog_fingerprint=catalog_fingerprint)

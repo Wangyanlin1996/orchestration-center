@@ -18,7 +18,7 @@ import React, { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from "react-i18next";
 import DeleteConfirm from "@/components/common/pop_confirm/index.jsx";
 import { getAgentCards } from "@/service/api.js";
-import { hasRoleTasks, groupRoleTasks, isApprovedRoleSkill } from '../rolePolicy.js';
+import { hasRoleTasks, groupRoleTasks, isApprovedEntry, isApprovedRoleSkill } from '../rolePolicy.js';
 
 const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes, setEdges, isDark, onDelete, onClose, readOnly = false, catalog = null, onRoleTaskContentChange }) => {
     const { t } = useTranslation();
@@ -311,10 +311,10 @@ const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes,
         return val;
     };
     if (protectedWorkflow) {
-        const approvedRoles = (catalog?.roles || []).filter(role => role.review_status === 'approved');
+        const approvedRoles = (catalog?.roles || []).filter(isApprovedEntry);
         const approvedSkillsOf = (roleId, roleVersion) => {
             const role = approvedRoles.find(item => item.role_id === roleId && item.role_version === roleVersion);
-            return (role?.skills || []).filter(skill => skill.review_status === 'approved');
+            return (role?.skills || []).filter(isApprovedEntry);
         };
         return (
             <div className={`p-4 space-y-4 overflow-auto ${theme.container}`}>

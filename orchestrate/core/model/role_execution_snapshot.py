@@ -25,6 +25,9 @@ class RoleExecutionSnapshot(CatalogModel):
     schema_version: Literal["role-pilot-v2"] = "role-pilot-v2"
     execution_id: Identifier
     catalog_version: Identifier
+    # Content digest of the exact approved catalog release used for the
+    # resolution, so a same-version catalog edit invalidates the arrangement.
+    catalog_fingerprint: Identifier
     config_version: Identifier
     policy_version: Identifier
     context: ResolutionContext
@@ -43,11 +46,13 @@ class RoleExecutionSnapshot(CatalogModel):
         return self
 
 
-def freeze_role_execution(template: PSOP, result, cards: list[AgentCardSnapshot], execution_id: str) -> RoleExecutionSnapshot:
+def freeze_role_execution(template: PSOP, result, cards: list[AgentCardSnapshot], execution_id: str,
+                          *, catalog_fingerprint: str) -> RoleExecutionSnapshot:
     """Detach all input data and validate the entire envelope before returning."""
     fields = FrozenBinding.model_fields
     payload = dict(schema_version="role-pilot-v2", execution_id=execution_id,
-        catalog_version=result.catalog_version, config_version=result.config_version,
+        catalog_version=result.catalog_version, catalog_fingerprint=catalog_fingerprint,
+        config_version=result.config_version,
         policy_version=result.policy_version, context=result.context.model_dump(mode="json"),
         template=template.model_dump(mode="json"),
         template_fingerprint=content_digest(template.model_dump(mode="json")),

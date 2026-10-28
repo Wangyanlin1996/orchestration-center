@@ -185,6 +185,10 @@ class RoleSnapshot(WireModel):
     schema_version: Literal["role-pilot-v2"] = "role-pilot-v2"
     execution_id: Identifier
     catalog_version: Identifier
+    # Content digest of the exact approved catalog release the center used.
+    # Carries catalog content changes (same version, edited description) into
+    # the snapshot digest and thus into the dispatch signature.
+    catalog_fingerprint: Digest
     config_version: Identifier
     policy_version: Identifier
     context: ExecutionContext
