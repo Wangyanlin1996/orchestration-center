@@ -29,6 +29,7 @@ from orchestrate.runtime.instance_projection import (
     ResolutionError, ResolutionRequest, assemble_resolution_inputs,
     freeze_resolution_snapshot,
 )
+from orchestrate.runtime.role_admission import role_execution_admission
 from orchestrate.runtime.role_resolver import evaluate_selection_units, resolve_role_bindings
 
 _CODE_PREFIX = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -76,6 +77,13 @@ class RolePreviewUnit(BaseModel):
     exclusions: list[RolePreviewExclusion]
 
 
+class RolePreviewAdmission(BaseModel):
+    """Deployment admission state: technical candidates do not imply execution admission."""
+
+    allowed: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
 class RolePreviewResponse(BaseModel):
     psop_id: str
     psop_name: str
@@ -89,6 +97,7 @@ class RolePreviewResponse(BaseModel):
     issues: list[RolePreviewIssue]
     can_execute: bool
     resolution_fingerprint: str | None = None
+    execution_admission: RolePreviewAdmission
 
 
 def _issue(error, code: str | None = None) -> RolePreviewIssue:
@@ -147,14 +156,19 @@ def _preview_unit(evaluation, context) -> RolePreviewUnit:
 
 def _response(psop: PSOP, *, template_fingerprint: str | None, catalog_version=None, config_version=None,
               policy_version=None, scope=None, caller_id=None, units=(), issues=(),
-              can_execute=False, fingerprint=None) -> RolePreviewResponse:
+              can_execute=False, fingerprint=None, admission=None) -> RolePreviewResponse:
+    from orchestrate.runtime.role_admission import role_execution_admission
+
+    if admission is None:
+        allowed, reasons = role_execution_admission()
+        admission = RolePreviewAdmission(allowed=allowed, reasons=reasons)
     return RolePreviewResponse(
         psop_id=psop.id, psop_name=psop.name,
         template_fingerprint=template_fingerprint,
         catalog_version=catalog_version, config_version=config_version, policy_version=policy_version,
         execution_scope=scope, caller_id=caller_id,
         units=list(units), issues=list(issues), can_execute=can_execute,
-        resolution_fingerprint=fingerprint,
+        resolution_fingerprint=fingerprint, execution_admission=admission,
     )
 
 
@@ -169,15 +183,19 @@ def build_role_preview(psop: PSOP, request: ResolutionRequest | None, agent_card
     from orchestrate.core.model.role_execution_snapshot import content_digest, resolution_fingerprint
 
     template_fingerprint = content_digest(psop.model_dump(mode="json"))
+    allowed, admission_reasons = role_execution_admission()
+    admission = RolePreviewAdmission(allowed=allowed, reasons=admission_reasons)
 
     try:
         inputs = assemble_resolution_inputs(psop, request, agent_cards)
     except ValidationError as error:
         raise ResolutionError("RESOLUTION_INPUT_INVALID", f"invalid resolution inputs: {error}") from error
     except RoleReferenceError as error:
-        return _response(psop, template_fingerprint=template_fingerprint, issues=[_issue(error)])
+        return _response(psop, template_fingerprint=template_fingerprint, issues=[_issue(error)],
+                         admission=admission)
     except ResolutionError as error:
-        return _response(psop, template_fingerprint=template_fingerprint, issues=[_issue(error)])
+        return _response(psop, template_fingerprint=template_fingerprint, issues=[_issue(error)],
+                         admission=admission)
 
     context, policy = inputs.context, inputs.policy
     scope = f"{context.scope.tenant}/{context.scope.site}/{context.scope.business_object}"
@@ -229,6 +247,7 @@ def build_role_preview(psop: PSOP, request: ResolutionRequest | None, agent_card
         config_version=versions["config_version"],
         policy_version=versions["policy_version"],
         scope=scope, caller_id=context.caller_id,
-        units=units, issues=issues, can_execute=fingerprint is not None,
-        fingerprint=fingerprint,
+        units=units, issues=issues,
+        can_execute=fingerprint is not None and allowed,
+        fingerprint=fingerprint, admission=admission,
     )

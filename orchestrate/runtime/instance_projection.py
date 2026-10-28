@@ -27,6 +27,7 @@ from orchestrate.core.model.instance_binding import (
 )
 from orchestrate.core.model.psop import PSOP
 from orchestrate.core.model.role_execution_snapshot import RoleExecutionSnapshot
+from orchestrate.runtime.role_admission import role_execution_admission
 from orchestrate.runtime.role_resolver import ResolutionError
 
 
@@ -239,6 +240,14 @@ def resolve_execution_plan(
         raise ResolutionError(
             "RESOLUTION_INPUT_INVALID",
             "resolve_execution_plan called for a workflow without role tasks",
+        )
+    # Deployment admission (REQ74 P4): one gate ahead of every center entry
+    # (internal, external, by-id, by-intent), before any resolution work.
+    admitted, reasons = role_execution_admission()
+    if not admitted:
+        raise ResolutionError(
+            "ROLE_EXECUTION_NOT_ENABLED",
+            "Role execution is not admitted on this deployment: " + ", ".join(reasons),
         )
     inputs = assemble_resolution_inputs(psop, request, agent_cards)
     result = resolve_role_bindings(

@@ -263,6 +263,24 @@ def test_execute_without_confirmation_is_rejected(client, stored_psop, cards, re
     assert response.status_code == 422
 
 
+def test_execute_on_closed_deployment_refuses_with_evidence(client, stored_psop, cards,
+                                                            resolution_inputs, saved_records,
+                                                            monkeypatch):
+    monkeypatch.setattr("orchestrate.runtime.role_admission.configured_role_execution_mode",
+                        lambda: None)
+    response = client.post(f"{BASE}/role-execution/execute", json={
+        "psop_id": stored_psop.id, "scope": "t/city-a/b",
+        "confirm_fingerprint": "0" * 64,
+    })
+
+    assert response.status_code == 200
+    assert "ROLE_EXECUTION_NOT_ENABLED" in response.text
+    assert len(saved_records) == 1
+    record = saved_records[0]
+    assert record.status == ExecutionStatus.FAILED
+    assert record.confirm_fingerprint == "0" * 64
+
+
 def test_execute_confirmed_mismatch_fails_with_evidence(client, stored_psop, cards,
                                                         resolution_inputs, saved_records):
     response = client.post(f"{BASE}/role-execution/execute", json={

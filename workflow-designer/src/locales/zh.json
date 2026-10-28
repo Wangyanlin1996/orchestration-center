@@ -162,6 +162,7 @@
     "confirm_execute": "确认执行",
     "confirming": "执行中...",
     "confirm_failed": "确认执行失败",
+    "preview_admission_blocked": "当前部署未开放角色执行（技术候选可见不代表执行准入已通过）",
     "scope_incomplete": "请完整填写租户/地点/业务对象，或全部留空使用服务器默认范围"
   },
   "orchestration": {

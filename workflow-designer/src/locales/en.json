@@ -162,6 +162,7 @@
     "confirm_execute": "Confirm & Execute",
     "confirming": "Executing...",
     "confirm_failed": "Confirmed execution failed",
+    "preview_admission_blocked": "Role execution is not admitted on this deployment (visible technical candidates do not imply execution admission)",
     "scope_incomplete": "Fill tenant/site/business_object completely, or leave all empty for the server default"
   },
   "orchestration": {

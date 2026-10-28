@@ -216,6 +216,17 @@ const RolePreviewPanel = memo(({
                     </div>
                 )}
 
+                {preview.execution_admission && !preview.execution_admission.allowed && (
+                    <div role="alert" data-testid="role-preview-admission"
+                        className="flex items-start gap-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 text-[11px] text-amber-600 dark:text-amber-400">
+                        <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                        <div>
+                            <span className="font-bold">{t('execution.preview_admission_blocked')}</span>
+                            <div className="opacity-90">{preview.execution_admission.reasons.join(', ')}</div>
+                        </div>
+                    </div>
+                )}
+
                 <div className="space-y-2">
                     {preview.units.map(unit => (
                         <PreviewUnitCard
