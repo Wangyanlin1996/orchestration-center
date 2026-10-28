@@ -529,6 +529,21 @@ const FlowInner = ({
         if (onSaveSuccess) onSaveSuccess(savedId);
     }, [onSaveSuccess]);
 
+    // Role task CONTENT editing (REQ74 P3): the only mutation path allowed on
+    // a protected canvas. It rewrites subtask content fields in place; the
+    // structure (task ids, steps, edges, groups) is never touched here.
+    const handleRoleTaskContentChange = useCallback((nodeId, taskIndex, patch) => {
+        if (!protectedWorkflow) return;
+        setEditNodes(nds => nds.map(node => {
+            if (node.id !== nodeId) return node;
+            const subtasks = (node.data.subtasks || []).map((task, i) => (
+                i === taskIndex ? { ...task, ...patch } : task
+            ));
+            return { ...node, data: { ...node.data, subtasks } };
+        }));
+        setIsDirty(true);
+    }, [protectedWorkflow, setEditNodes]);
+
     const onDeleteSelected = useCallback(() => {
         if (!selectedElement || protectedWorkflow) return;
         // Guard by type so both id schemes ('startNode'/'endNode' on a blank
@@ -782,7 +797,7 @@ const FlowInner = ({
                 <>
                     <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
                         <div className="pointer-events-auto">
-                            <Toolbar isDark={isDark} nodes={editNodes} edges={editEdges} workflowId={workflowId} workflowName={workflowName} workflowDescription={workflowDescription} workflowMetadata={workflowMetadata} protectedWorkflow={protectedWorkflow} onCancel={handleCancel} onClear={() => { if (protectedWorkflow) return; setEditNodes(initialEditNodes); setEditEdges([]); setIsDirty(true); }} onFitView={() => fitView({ padding: 0.4, duration: 800 })} onSaveSuccess={handleSaveSuccess} />
+                            <Toolbar isDark={isDark} nodes={editNodes} edges={editEdges} workflowId={workflowId} workflowName={workflowName} workflowDescription={workflowDescription} workflowMetadata={workflowMetadata} protectedWorkflow={protectedWorkflow} catalog={displayCatalog} onCancel={handleCancel} onClear={() => { if (protectedWorkflow) return; setEditNodes(initialEditNodes); setEditEdges([]); setIsDirty(true); }} onFitView={() => fitView({ padding: 0.4, duration: 800 })} onSaveSuccess={handleSaveSuccess} />
                         </div>
                     </div>
                     <div className="absolute left-1/2 -translate-x-1/2 bottom-8 h-auto z-40 pointer-events-none flex items-center min-h-0">
@@ -794,7 +809,7 @@ const FlowInner = ({
                     <div className={`absolute justify-center right-4 top-4 bottom-4 w-80 z-40 pointer-events-none flex flex-col min-h-0 transition-all duration-300 transform ${selectedElement ? 'translate-x-0 opacity-100' : 'translate-x-10 opacity-0'}`}>
                         <div className={`pointer-events-auto flex flex-col backdrop-blur-md border rounded-2xl overflow-hidden ${themeClasses.panel}`}>
                             {selectedElement && (
-                                <PropertyPanel readOnly={protectedWorkflow} isDark={isDark} selectedElement={selectedElement} nodes={displayNodes} edges={editEdges} setNodes={(nds) => { if (protectedWorkflow) return; setEditNodes(nds); setIsDirty(true); }} setEdges={(eds) => { if (protectedWorkflow) return; setEditEdges(eds); setIsDirty(true); }} onDelete={onDeleteSelected} setPhenomenon={setPhenomenon} onClose={() => setSelectedElement(null)} />
+                                <PropertyPanel readOnly={protectedWorkflow} isDark={isDark} selectedElement={selectedElement} nodes={displayNodes} edges={editEdges} setNodes={(nds) => { if (protectedWorkflow) return; setEditNodes(nds); setIsDirty(true); }} setEdges={(eds) => { if (protectedWorkflow) return; setEditEdges(eds); setIsDirty(true); }} onDelete={onDeleteSelected} setPhenomenon={setPhenomenon} onClose={() => setSelectedElement(null)} catalog={displayCatalog} onRoleTaskContentChange={handleRoleTaskContentChange} />
                             )}
                         </div>
                     </div>

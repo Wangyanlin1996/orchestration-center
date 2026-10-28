@@ -663,6 +663,18 @@ const ExecutionCenter = ({ isDark }) => {
         && !isRunning
     );
 
+    // A template saved elsewhere (orchestration center) invalidates the
+    // arrangement preview: the confirm digest would reject it server-side.
+    useEffect(() => {
+        const onWorkflowSaved = (event) => {
+            if (event.detail?.workflow_id && event.detail.workflow_id === selectedId) {
+                setRolePreviewStale(true);
+            }
+        };
+        window.addEventListener('orchestrate:workflow-saved', onWorkflowSaved);
+        return () => window.removeEventListener('orchestrate:workflow-saved', onWorkflowSaved);
+    }, [selectedId]);
+
     const handleConfirmRoleExecution = useCallback(() => {
         if (!canConfirmRoleExecution) return;
         const fingerprint = rolePreview.resolution_fingerprint;
