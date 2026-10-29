@@ -16,6 +16,7 @@
 //    under the License.
 import React, { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from "react-i18next";
+import { X } from 'lucide-react';
 import DeleteConfirm from "@/components/common/pop_confirm/index.jsx";
 import { getAgentCards } from "@/service/api.js";
 import { hasRoleTasks, groupRoleTasks, isApprovedEntry, isApprovedRoleSkill } from '../rolePolicy.js';
@@ -318,7 +319,15 @@ const PropertyPanel = ({ selectedElement, nodes, edges, setPhenomenon, setNodes,
         };
         return (
             <div className={`p-4 space-y-4 overflow-auto ${theme.container}`}>
-                <button type="button" onClick={onClose}>{t('common.close')}</button>
+                <button
+                    type="button"
+                    onClick={onClose}
+                    className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 -ml-1 rounded-lg text-[12px] font-bold uppercase tracking-wide transition-colors ${isDark ? 'hover:bg-zinc-800 text-zinc-400' : 'hover:bg-slate-100 text-slate-500'}`}
+                    title={t('common.close')}
+                >
+                    <X size={14} />
+                    {t('common.close')}
+                </button>
                 <p role="note">{t('workflow.roleProtection')}</p>
                 <h3 className="font-bold">{data.label || activeElement.id}</h3>
                 {!isNode && <p>{data.condition || activeElement.label || '-'}</p>}

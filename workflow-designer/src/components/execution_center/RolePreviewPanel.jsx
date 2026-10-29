@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { memo } from 'react';
-import { AlertTriangle, CheckCircle2, Eye, Loader2, Play, RefreshCw, RotateCcw, Users, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Eye, Loader2, Play, RefreshCw, RotateCcw, Users, XCircle } from 'lucide-react';
 
 const SELECTION_REASON_KEYS = {
     highest_priority: 'execution.preview_reason_highest_priority',
@@ -121,10 +121,56 @@ const PreviewUnitCard = memo(({ unit, t, onOverrideUnit, onResetUnit, disabled }
     );
 });
 
+const PreviewCollapsedBar = memo(({ preview, t, stale, running, onExpand }) => {
+    const instanceIds = new Set(
+        preview.units.map(unit => unit.current_selection?.instance_id).filter(Boolean),
+    );
+    return (
+        <button
+            type="button"
+            onClick={onExpand}
+            aria-expanded="false"
+            data-testid="role-preview-collapsed-bar"
+            className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-700 w-full flex items-center gap-2 flex-wrap text-left group"
+        >
+            <Users size={14} className="text-zinc-500" />
+            <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase">
+                {t('execution.preview_title')}
+            </span>
+            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {`${preview.units.length} ${t('execution.preview_unit_tasks')} · ${instanceIds.size} ${t('execution.preview_unit_instances')}`}
+            </span>
+            {running && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400">
+                    {t('execution.running')}
+                </span>
+            )}
+            {stale && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400">
+                    {t('execution.preview_stale')}
+                </span>
+            )}
+            <ChevronDown size={14} className="ml-auto text-zinc-500 group-hover:text-zinc-700 dark:group-hover:text-zinc-300" />
+        </button>
+    );
+});
+
 const RolePreviewPanel = memo(({
     theme, t, preview, stale, loading, error, scope, onScopeChange, onPreview,
-    onOverrideUnit, onResetUnit, onConfirm, canConfirm, confirming,
-}) => (
+    onOverrideUnit, onResetUnit, onConfirm, canConfirm, confirming, running, collapsed, onToggleCollapse,
+}) => {
+    if (collapsed && preview) {
+        return (
+            <PreviewCollapsedBar
+                preview={preview}
+                t={t}
+                stale={stale}
+                running={running}
+                onExpand={onToggleCollapse}
+            />
+        );
+    }
+    return (
     <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-700" data-testid="role-preview-panel">
         <div className="flex items-center gap-2 mb-3">
             <Users size={14} className="text-zinc-500" />
@@ -135,6 +181,17 @@ const RolePreviewPanel = memo(({
                 <span role="status" className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400">
                     {t('execution.preview_stale')}
                 </span>
+            )}
+            {preview && (
+                <button
+                    type="button"
+                    onClick={onToggleCollapse}
+                    data-testid="role-preview-collapse"
+                    title={t('execution.collapse')}
+                    className="ml-auto p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                >
+                    <ChevronUp size={14} className="text-zinc-500" />
+                </button>
             )}
         </div>
         <div className="flex items-end gap-3 flex-wrap">
@@ -227,7 +284,7 @@ const RolePreviewPanel = memo(({
                     </div>
                 )}
 
-                <div className="space-y-2">
+                <div className="space-y-2 max-h-[45vh] overflow-y-auto custom-scrollbar">
                     {preview.units.map(unit => (
                         <PreviewUnitCard
                             key={unit.unit_id}
@@ -266,7 +323,8 @@ const RolePreviewPanel = memo(({
             </div>
         )}
     </div>
-));
+    );
+});
 
 RolePreviewPanel.displayName = 'RolePreviewPanel';
 export default RolePreviewPanel;

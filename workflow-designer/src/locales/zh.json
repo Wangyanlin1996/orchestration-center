@@ -159,6 +159,8 @@
     "preview_reason_override": "手工指定",
     "preview_override_hint": "点击候选实例可手工改选；改选后自动重新预览",
     "preview_reset": "恢复自动",
+    "preview_unit_tasks": "个任务",
+    "preview_unit_instances": "个实例",
     "confirm_execute": "确认执行",
     "confirming": "执行中...",
     "confirm_failed": "确认执行失败",

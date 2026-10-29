@@ -577,6 +577,27 @@ const FlowInner = ({
         setSelectedElement(null);
     }, [selectedElement, editNodes, setEditNodes, setEditEdges, protectedWorkflow]);
 
+    // React Flow v12 re-invokes onSelectionChange whenever its prop identity
+    // changes (SelectionListenerInner effect). An inline arrow would re-fire on
+    // every parent re-render with the still-selected store elements and
+    // re-open the panel right after the close button cleared it.
+    const handleSelectionChange = useCallback(({ nodes, edges }) => {
+        setSelectedElement(nodes[0] || edges[0] || null);
+    }, []);
+
+    // Closing the edit panel must also deselect in the controlled nodes/edges:
+    // adoption syncs the empty selection back into the RF store, clearing the
+    // canvas highlight and letting re-clicking the same step reopen the panel.
+    const closeEditPanel = useCallback(() => {
+        setSelectedElement(null);
+        setEditNodes(nds => nds.some(node => node.selected)
+            ? nds.map(node => (node.selected ? { ...node, selected: false } : node))
+            : nds);
+        setEditEdges(eds => eds.some(edge => edge.selected)
+            ? eds.map(edge => (edge.selected ? { ...edge, selected: false } : edge))
+            : eds);
+    }, [setEditNodes, setEditEdges]);
+
     const onNodeDragStop = useCallback((event, node) => {
         if (protectedWorkflow || mode !== 'edit' || !node || node.type !== 'agentNode' || !rfInstance) return;
 
@@ -744,7 +765,7 @@ const FlowInner = ({
                 onNodeDragStop={(e, n) => { onNodeDragStop(e, n); setIsDirty(true); }}
                 onDrop={mode === 'edit' ? onDrop : undefined}
                 onDragOver={mode === 'edit' ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } : undefined}
-                onSelectionChange={mode === 'edit' ? (({ nodes, edges }) => setSelectedElement(nodes[0] || edges[0] || null)) : undefined}
+                onSelectionChange={mode === 'edit' ? handleSelectionChange : undefined}
                 onNodeClick={(e, n) => {
                     if (mode === 'view') {
                         e.stopPropagation();
@@ -826,7 +847,7 @@ const FlowInner = ({
                     <div className={`absolute justify-center right-4 top-4 bottom-4 w-80 z-40 pointer-events-none flex flex-col min-h-0 transition-all duration-300 transform ${selectedElement ? 'translate-x-0 opacity-100' : 'translate-x-10 opacity-0'}`}>
                         <div className={`pointer-events-auto flex flex-col backdrop-blur-md border rounded-2xl overflow-hidden ${themeClasses.panel}`}>
                             {selectedElement && (
-                                <PropertyPanel readOnly={protectedWorkflow} isDark={isDark} selectedElement={selectedElement} nodes={displayNodes} edges={editEdges} setNodes={(nds) => { if (protectedWorkflow) return; setEditNodes(nds); setIsDirty(true); }} setEdges={(eds) => { if (protectedWorkflow) return; setEditEdges(eds); setIsDirty(true); }} onDelete={onDeleteSelected} setPhenomenon={setPhenomenon} onClose={() => setSelectedElement(null)} catalog={displayCatalog} onRoleTaskContentChange={handleRoleTaskContentChange} />
+                                <PropertyPanel readOnly={protectedWorkflow} isDark={isDark} selectedElement={selectedElement} nodes={displayNodes} edges={editEdges} setNodes={(nds) => { if (protectedWorkflow) return; setEditNodes(nds); setIsDirty(true); }} setEdges={(eds) => { if (protectedWorkflow) return; setEditEdges(eds); setIsDirty(true); }} onDelete={onDeleteSelected} setPhenomenon={setPhenomenon} onClose={closeEditPanel} catalog={displayCatalog} onRoleTaskContentChange={handleRoleTaskContentChange} />
                             )}
                         </div>
                     </div>

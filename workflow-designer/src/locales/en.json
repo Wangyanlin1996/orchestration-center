@@ -159,6 +159,8 @@
     "preview_reason_override": "Manual override",
     "preview_override_hint": "Click a candidate to re-select manually; the arrangement is re-previewed automatically",
     "preview_reset": "Auto",
+    "preview_unit_tasks": "tasks",
+    "preview_unit_instances": "instances",
     "confirm_execute": "Confirm & Execute",
     "confirming": "Executing...",
     "confirm_failed": "Confirmed execution failed",

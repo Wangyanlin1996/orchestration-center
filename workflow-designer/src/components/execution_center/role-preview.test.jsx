@@ -216,6 +216,41 @@ it('re-previews with an override and confirms execution with the digest', async 
     }
 });
 
+it('collapses the arrangement after confirming and re-expands from the summary bar', async () => {
+    const { container, root, scroll } = await render();
+    try {
+        await selectRoleWorkflow(container);
+        await act(async () => container.querySelector('[data-testid="role-execute-button"]').click());
+
+        const bar = container.querySelector('[data-testid="role-preview-collapsed-bar"]');
+        expect(bar).not.toBeNull();
+        expect(container.querySelector('[data-testid="role-preview-unit"]')).toBeNull();
+        expect(container.textContent).toContain('execution.running');
+
+        await act(async () => bar.click());
+        expect(container.querySelector('[data-testid="role-preview-unit"]')).not.toBeNull();
+    } finally {
+        await teardown(root, container, scroll);
+    }
+});
+
+it('collapses and re-expands the arrangement via the title chevron before executing', async () => {
+    const { container, root, scroll } = await render();
+    try {
+        await selectRoleWorkflow(container);
+        await act(async () => container.querySelector('[data-testid="role-preview-collapse"]').click());
+
+        expect(container.querySelector('[data-testid="role-preview-collapsed-bar"]')).not.toBeNull();
+        expect(container.querySelector('[data-testid="role-preview-panel"]')).toBeNull();
+
+        await act(async () => container.querySelector('[data-testid="role-preview-collapsed-bar"]').click());
+        expect(container.querySelector('[data-testid="role-preview-panel"]')).not.toBeNull();
+        expect(container.querySelector('[data-testid="role-preview-unit"]')).not.toBeNull();
+    } finally {
+        await teardown(root, container, scroll);
+    }
+});
+
 it('blocks confirmation while the inputs are stale', async () => {
     const { container, root, scroll } = await render();
     try {

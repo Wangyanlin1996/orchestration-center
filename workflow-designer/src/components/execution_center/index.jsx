@@ -569,6 +569,9 @@ const ExecutionCenter = ({ isDark }) => {
     // Manual re-selection from the preview panel; null means fully automatic.
     const [roleOverrides, setRoleOverrides] = useState(null);
     const [isConfirming, setIsConfirming] = useState(false);
+    // The arrangement collapses into a one-row summary bar once execution
+    // starts (or on demand) so the workflow graph gets the vertical space.
+    const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
     const roleAbortRef = useRef(null);
 
     const clearRolePreview = useCallback(() => {
@@ -579,6 +582,11 @@ const ExecutionCenter = ({ isDark }) => {
         setPreviewError(null);
         setRoleOverrides(null);
         setIsConfirming(false);
+        setIsPreviewCollapsed(false);
+    }, []);
+
+    const handleTogglePreviewCollapse = useCallback(() => {
+        setIsPreviewCollapsed(prev => !prev);
     }, []);
 
     const handleRoleScopeChange = useCallback((field, value) => {
@@ -696,6 +704,9 @@ const ExecutionCenter = ({ isDark }) => {
         setSelectedExecutionId(null);
         setSelectedSandboxReport(null);
         setIsConfirming(true);
+        // Free the vertical space for the execution graph; the collapsed
+        // summary bar keeps the arrangement one click away.
+        setIsPreviewCollapsed(true);
 
         const controller = new AbortController();
         roleAbortRef.current = controller;
@@ -1336,7 +1347,7 @@ const ExecutionCenter = ({ isDark }) => {
 
             <div className="flex-1 min-h-0 overflow-hidden">
                 {activeSubMenu === 'execution' ? (
-                    <div className="h-full px-8 pb-6 flex flex-col gap-4 w-full overflow-hidden">
+                    <div className="h-full px-8 pb-6 flex flex-col gap-4 w-full overflow-y-auto custom-scrollbar">
                         {/* Search & Control Bar */}
                         <div className={`shrink-0 rounded-2xl border ${isSearchCollapsed ? 'px-5 py-3' : 'p-5'} ${theme.panel}`}>
 
@@ -1484,6 +1495,9 @@ const ExecutionCenter = ({ isDark }) => {
                         onConfirm={handleConfirmRoleExecution}
                         canConfirm={canConfirmRoleExecution}
                         confirming={isConfirming}
+                        running={isRunning}
+                        collapsed={isPreviewCollapsed}
+                        onToggleCollapse={handleTogglePreviewCollapse}
                     />
                 )}
 
@@ -1554,7 +1568,7 @@ const ExecutionCenter = ({ isDark }) => {
             </div>
 
             {/* Main Content Area - Three Column Layout */}
-            <div className="flex-1 flex gap-4 min-h-0 relative">
+            <div className="flex-1 flex gap-4 min-h-[320px] relative">
                 {/* Left Panel - Workflow List */}
                 {isLeftPanelCollapsed ? (
                     <button

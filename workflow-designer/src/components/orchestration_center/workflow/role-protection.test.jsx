@@ -19,7 +19,10 @@ vi.mock('@xyflow/react', async importOriginal => ({
     useReactFlow: () => capture.flowApi,
 }));
 vi.mock('./toolbar/index.jsx', () => ({ default: props => { capture.toolbar = props; return null; } }));
-vi.mock('./property_panel/index.jsx', () => ({ default: props => { capture.panel = props; return null; } }));
+vi.mock('./property_panel/index.jsx', () => ({ default: props => {
+    capture.panel = props;
+    return <div data-testid="property-panel" />;
+} }));
 vi.mock('./sidebar/index.jsx', () => ({ default: () => <div data-testid="sidebar" /> }));
 
 import UnifiedWorkflow from './index.jsx';
@@ -123,5 +126,26 @@ describe('role and mixed canvas protection', () => {
         // The original metadata stays untouched; only the snapshot moves.
         expect(capture.toolbar.workflowMetadata).toBe(design);
         expect(design.steps[0].subtasks[0].description).toBe('Analyze');
+    });
+
+    it('keeps the edit panel closed after its close button and clears RF selection', async () => {
+        const design = template('role');
+        const graph = transformWorkflowToReactFlow(design);
+        await act(async () => root.render(<UnifiedWorkflow mode="edit" visible importedNodes={graph.nodes}
+            importedEdges={graph.edges} workflowMetadata={design} workflowId="wf" />));
+        // Mirror the RF-controlled select flow: the store applies the change and
+        // the parent receives it through onNodesChange.
+        await act(async () => capture.flow.onNodesChange([{ type: 'select', id: 'role-step', selected: true }]));
+        const handler = capture.flow.onSelectionChange;
+        await act(async () => capture.flow.onSelectionChange({ nodes: [graph.nodes.find(node => node.id === 'role-step')], edges: [] }));
+        // Opening the panel re-renders the parent. RF v12 re-invokes
+        // onSelectionChange whenever its identity changes, so an unstable
+        // handler would immediately re-open the panel after close.
+        expect(capture.flow.onSelectionChange).toBe(handler);
+        expect(container.querySelector('[data-testid="property-panel"]')).not.toBeNull();
+        await act(async () => capture.panel.onClose());
+        expect(container.querySelector('[data-testid="property-panel"]')).toBeNull();
+        expect(capture.flow.nodes.every(node => !node.selected)).toBe(true);
+        expect(capture.flow.edges.every(edge => !edge.selected)).toBe(true);
     });
 });
